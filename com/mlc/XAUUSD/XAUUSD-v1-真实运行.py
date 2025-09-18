@@ -519,19 +519,19 @@ class FTMORealTimeTrader:
             sl = entry_price - atr * sl_multiplier
             tp = entry_price + atr * tp_multiplier
             if tick.bid <= sl:
-                self.close_position("止损")
+                # self.close_position("止损")
                 return True
             if tick.bid >= tp:
-                self.close_position("止盈")
+                # self.close_position("止盈")
                 return True
         else:  # 空仓
             sl = entry_price + atr * sl_multiplier
             tp = entry_price - atr * tp_multiplier
             if tick.ask >= sl:
-                self.close_position("止损")
+                # self.close_position("止损")
                 return True
             if tick.ask <= tp:
-                self.close_position("止盈")
+                # self.close_position("止盈")
                 return True
 
         # 检查时间止损
