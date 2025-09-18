@@ -431,11 +431,6 @@ class FTMORealTimeTrader:
         """平仓操作"""
         global current_position, entry_price, entry_time, daily_loss, consecutive_losses, total_loss
 
-        # 检查MT5连接状态
-        if not mt5.connected():
-            self.log_and_print("MT5未连接，无法执行平仓操作")
-            logging.error("MT5未连接，无法执行平仓操作")
-            return False
 
         # 获取当前持仓信息
         if not hasattr(self, 'current_position_ticket') or not self.current_position_ticket:
@@ -519,19 +514,19 @@ class FTMORealTimeTrader:
             sl = entry_price - atr * sl_multiplier
             tp = entry_price + atr * tp_multiplier
             if tick.bid <= sl:
-                # self.close_position("止损")
+                self.close_position("止损")
                 return True
             if tick.bid >= tp:
-                # self.close_position("止盈")
+                self.close_position("止盈")
                 return True
         else:  # 空仓
             sl = entry_price + atr * sl_multiplier
             tp = entry_price - atr * tp_multiplier
             if tick.ask >= sl:
-                # self.close_position("止损")
+                self.close_position("止损")
                 return True
             if tick.ask <= tp:
-                # self.close_position("止盈")
+                self.close_position("止盈")
                 return True
 
         # 检查时间止损
