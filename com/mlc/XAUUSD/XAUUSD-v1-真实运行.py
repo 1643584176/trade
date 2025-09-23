@@ -37,6 +37,9 @@ daily_loss = 0.0
 consecutive_losses = 0
 total_loss = 0.0
 historical_data = pd.DataFrame()
+# 添加反向交易所需变量
+trade_sequence = 0  # 0: 无交易, 1: 第一单, 2: 第二单
+last_trade_signal = 0  # 上一单的交易信号
 
 
 class FTMORealTimeTrader:
@@ -268,6 +271,7 @@ class FTMORealTimeTrader:
         return None
 
     def generate_real_time_signal(self, latest_data):
+        global trade_sequence, last_trade_signal
         df = historical_data
         weekday_num = latest_data["星期数"]
         hour = latest_data["小时"]
@@ -325,6 +329,12 @@ class FTMORealTimeTrader:
                 signal = open_direction
                 reasons.append(f"动量一致({signal})")
 
+        # 添加反向交易逻辑 - 第二单反向
+        if trade_sequence == 1 and signal != 0:
+            # 如果是第二单，使用第一单的反向信号
+            signal = -last_trade_signal
+            reasons.append(f"第二单反向交易({signal})")
+
         if len(reasons) < 1:
             signal = 0
             reasons.append("信号不足")
@@ -333,6 +343,13 @@ class FTMORealTimeTrader:
 
     def send_order(self, action, volume, price, sl=0, tp=0):
         """发送交易订单"""
+        # 检查MT5连接状态
+        terminal_info = mt5.terminal_info()
+        if terminal_info is None or not terminal_info.connected:
+            self.log_and_print("MT5未连接，无法发送订单")
+            logging.error("MT5未连接，无法发送订单")
+            return False
+
         # 订单类型：买入=0，卖出=1
         order_type = mt5.ORDER_TYPE_BUY if action == 1 else mt5.ORDER_TYPE_SELL
         order_type_str = "买入" if action == 1 else "卖出"
@@ -382,13 +399,16 @@ class FTMORealTimeTrader:
 
     def open_position(self, signal, latest_data):
         """开仓操作"""
-        global current_position, entry_price, entry_time, daily_trades
+        global current_position, entry_price, entry_time, daily_trades, trade_sequence, last_trade_signal
 
         # 获取当前市场价格
         tick = mt5.symbol_info_tick(SYMBOL)
         if tick is None:
             self.log_and_print("获取实时报价失败")
             return False
+
+        # 确定开仓价格
+        price = tick.ask if signal == 1 else tick.bid
 
         # 计算止损止盈
         atr = latest_data["ATR"] if not np.isnan(latest_data["ATR"]) else 0.001
@@ -404,13 +424,11 @@ class FTMORealTimeTrader:
             return round(price, 2)
 
         if signal == 1:  # 买入
-            price = tick.ask
             # 修正点差影响计算：止损需额外扣除点差，止盈需额外增加点差
             sl = round_price(price - (atr * sl_multiplier + spread_value * 1.5))
             tp = round_price(price + (atr * tp_multiplier - spread_value * 1.5))
             success = self.send_order(1, LOT_SIZE, price, sl, tp)
         else:  # 卖出
-            price = tick.bid
             # 修正点差影响计算：止损需额外增加点差，止盈需额外扣除点差
             sl = round_price(price + (atr * sl_multiplier + spread_value * 1.5))
             tp = round_price(price - (atr * tp_multiplier - spread_value * 1.5))
@@ -418,19 +436,27 @@ class FTMORealTimeTrader:
 
         if success:
             current_position = signal
-            entry_price = price
+            entry_price = price  # 使用正确的开仓价格
             entry_time = datetime.now()
             daily_trades += 1
+            trade_sequence += 1  # 更新交易序列
+            last_trade_signal = signal  # 记录当前交易信号
             # 使用send_order返回的订单号
             self.log_and_print(f"开仓成功 - 方向: {signal}, 价格: {price}, 手数: {LOT_SIZE}, "
-                               f"当前交易次数: {daily_trades}, 订单编号: {self.current_position_ticket}")
+                               f"当前交易次数: {daily_trades}, 订单编号: {self.current_position_ticket}, 交易序列: {trade_sequence}")
             return True
         return False
 
     def close_position(self, reason):
         """平仓操作"""
-        global current_position, entry_price, entry_time, daily_loss, consecutive_losses, total_loss
+        global current_position, entry_price, entry_time, daily_loss, consecutive_losses, total_loss, trade_sequence, last_trade_signal
 
+        # 检查MT5连接状态
+        terminal_info = mt5.terminal_info()
+        if terminal_info is None or not terminal_info.connected:
+            self.log_and_print("MT5未连接，无法执行平仓操作")
+            logging.error("MT5未连接，无法执行平仓操作")
+            return False
 
         # 获取当前持仓信息
         if not hasattr(self, 'current_position_ticket') or not self.current_position_ticket:
@@ -458,7 +484,7 @@ class FTMORealTimeTrader:
         success = self.send_order(action, position_info[0].volume, price)
 
         if success:
-            # 计算盈亏
+            # 使用正确的开仓价格计算盈亏
             if position_info[0].type == mt5.POSITION_TYPE_BUY:
                 profit = (price - position_info[0].price_open) * self.contract_size * position_info[0].volume
             else:
@@ -481,6 +507,12 @@ class FTMORealTimeTrader:
             current_position = 0
             entry_price = 0.0
             entry_time = None
+            
+            # 如果是第二单，则重置交易序列
+            if trade_sequence >= 2:
+                trade_sequence = 0
+                last_trade_signal = 0
+                self.log_and_print("完成两单循环，重置交易序列")
             return True
         return False
 
@@ -491,45 +523,33 @@ class FTMORealTimeTrader:
         if current_position == 0:
             return False
 
+        # 获取当前持仓信息以获取实际手数
+        if not hasattr(self, 'current_position_ticket') or not self.current_position_ticket:
+            self.log_and_print("无法获取持仓信息，无法计算浮盈")
+            return False
+            
+        position_info = mt5.positions_get(ticket=self.current_position_ticket)
+        if not position_info:
+            self.log_and_print("无法获取持仓信息，可能已平仓或连接中断")
+            return False
+            
+        # 使用持仓的实际手数
+        volume = position_info[0].volume
+
         # 获取当前价格
         tick = mt5.symbol_info_tick(SYMBOL)
         if tick is None:
             return False
 
-        # 计算ATR
-        atr = latest_data["ATR"] if not np.isnan(latest_data["ATR"]) else 0.001
-        sl_multiplier = 0.8
-        tp_multiplier = 1.6
-
         # 打印当前持仓状态
         current_price = tick.bid if current_position == 1 else tick.ask
-        current_profit = (current_price - entry_price) * self.contract_size * LOT_SIZE if current_position == 1 else \
-            (entry_price - current_price) * self.contract_size * LOT_SIZE
+        current_profit = (current_price - entry_price) * self.contract_size * volume if current_position == 1 else \
+            (entry_price - current_price) * self.contract_size * volume
         self.log_and_print(f"当前持仓 - 方向: {current_position}, 开仓价: {entry_price:.4f}, "
-                           f"当前价: {current_price:.4f}, 浮盈: {current_profit:.2f}美元, "
+                           f"当前价: {current_price:.4f}, 手数: {volume}, 浮盈: {current_profit:.2f}美元, "
                            f"持仓时间: {datetime.now() - entry_time}")
 
-        # 检查止盈止损
-        if current_position == 1:  # 多仓
-            sl = entry_price - atr * sl_multiplier
-            tp = entry_price + atr * tp_multiplier
-            if tick.bid <= sl:
-                self.close_position("止损")
-                return True
-            if tick.bid >= tp:
-                self.close_position("止盈")
-                return True
-        else:  # 空仓
-            sl = entry_price + atr * sl_multiplier
-            tp = entry_price - atr * tp_multiplier
-            if tick.ask >= sl:
-                self.close_position("止损")
-                return True
-            if tick.ask <= tp:
-                self.close_position("止盈")
-                return True
-
-        # 检查时间止损
+        # 检查时间止损（唯一平仓条件）
         if (datetime.now() - entry_time) >= timedelta(hours=TIME_STOP_LOSS):
             self.close_position("时间止损")
             return True

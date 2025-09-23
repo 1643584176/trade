@@ -286,13 +286,9 @@ class FTMORealTimeTrader:
             # 只保留最新的30根K线
             historical_data = combined_df.tail(30)
             
-            # 记录最新K线的服务器时间，用于验证
-            latest_time = historical_data["时间点"].iloc[-1]
-            # 确保latest_time是datetime类型
-            if isinstance(latest_time, pd.Timestamp):
-                self.log_and_print(f"数据更新完成 - 最新K线服务器时间: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                self.log_and_print(f"数据更新完成 - 最新K线服务器时间: {latest_time}")
+            # 移除K线时间打印，增加持仓信息透明度
+            self.log_and_print("数据更新完成")
+            self.log_current_position_info()
             
         except Exception as e:
             error_msg = f"更新实时数据时发生错误: {str(e)}"
@@ -314,13 +310,9 @@ class FTMORealTimeTrader:
             
             historical_data = df
             
-            # 记录最新K线的服务器时间，用于验证
-            latest_time = df["时间点"].iloc[-1]
-            # 确保latest_time是datetime类型
-            if isinstance(latest_time, pd.Timestamp):
-                self.log_and_print(f"指标计算完成 - 最新K线服务器时间: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                self.log_and_print(f"指标计算完成 - 最新K线服务器时间: {latest_time}")
+            # 移除K线时间打印，增加持仓信息透明度
+            self.log_and_print("指标计算完成")
+            self.log_current_position_info()
             
             return df.iloc[-1]
             
@@ -329,6 +321,41 @@ class FTMORealTimeTrader:
             self.log_and_print(error_msg)
             logging.error(error_msg)
             return None
+
+    def log_current_position_info(self):
+        """记录当前持仓信息以增加透明度"""
+        global current_position, entry_price, entry_time, daily_trades
+        
+        # 获取MT5实际持仓信息
+        position_info = None
+        if hasattr(self, 'current_position_ticket') and self.current_position_ticket:
+            position_info = mt5.positions_get(ticket=self.current_position_ticket)
+        
+        position_status = "无持仓"
+        if current_position == 1:
+            position_status = "多仓"
+        elif current_position == -1:
+            position_status = "空仓"
+            
+        self.log_and_print(f"持仓状态: {position_status}, 今日交易次数: {daily_trades}")
+        
+        if current_position != 0 and entry_price != 0.0:
+            # 获取当前市场价格
+            tick = mt5.symbol_info_tick(SYMBOL)
+            if tick is not None:
+                current_price = tick.bid if current_position == 1 else tick.ask
+                # 计算浮动盈亏
+                profit = (current_price - entry_price) * self.contract_size * LOT_SIZE if current_position == 1 else \
+                        (entry_price - current_price) * self.contract_size * LOT_SIZE
+                self.log_and_print(f"开仓价格: {entry_price:.2f}, 当前价格: {current_price:.2f}, 浮动盈亏: {profit:.2f}")
+        
+        # 显示MT5实际持仓信息
+        if position_info is not None and len(position_info) > 0:
+            pos = position_info[0]
+            self.log_and_print(f"MT5持仓信息 - 订单号: {pos.ticket}, 方向: {'BUY' if pos.type == 0 else 'SELL'}, "
+                              f"价格: {pos.price_open:.2f}, 手数: {pos.volume}")
+        elif hasattr(self, 'current_position_ticket') and self.current_position_ticket:
+            self.log_and_print(f"MT5持仓信息: 未找到订单号 {self.current_position_ticket} 的持仓")
 
     def get_session_type(self, hour):
         if 0 <= hour <= 6:
@@ -390,6 +417,9 @@ class FTMORealTimeTrader:
         # 显示信号分析时间和相关信息
         latest_time = latest_data["时间点"].strftime('%Y-%m-%d %H:%M:%S')
         self.log_and_print(f"信号分析 - K线时间: {latest_time}, 时段: {session_type}, 星期: {weekday_num}, 小时: {hour}")
+        self.log_and_print(f"开仓方向: {open_direction}, 1周期动量: {momentum_1}, 3周期动量: {momentum_3}, ATR: {atr:.4f}")
+        # 增加持仓信息透明度
+        self.log_current_position_info()
 
         if session_type not in ["欧洲", "美洲"]:
             return 0, ["非交易时段"]
@@ -555,6 +585,8 @@ class FTMORealTimeTrader:
             # 使用send_order返回的订单号
             self.log_and_print(f"开仓成功 - 方向: {signal}, 价格: {price}, 手数: {LOT_SIZE}, "
                                f"当前交易次数: {daily_trades}, 订单编号: {self.current_position_ticket}, 交易序列: {trade_sequence}")
+            # 增加持仓信息透明度
+            self.log_current_position_info()
             return True
         return False
 
@@ -638,6 +670,10 @@ class FTMORealTimeTrader:
         entry_time = None
         self.current_position_ticket = None
         
+        # 增加持仓信息透明度
+        self.log_and_print("平仓完成，当前无持仓")
+        self.log_current_position_info()
+        
         return True
 
     def check_close_conditions(self, latest_data):
@@ -683,15 +719,12 @@ class FTMORealTimeTrader:
                 last_close_reason = close_reason
                 
                 # 执行后续交易
-                if trade_sequence == 1:  # 如果是第一单被平仓，则执行后续交易
-                    self.log_and_print(f"检测到MT5自动平仓，原因: {close_reason}，执行后续交易: {next_signal}")
-                    self.open_position(next_signal, latest_data)
-                    return True
-                
-                # 重置交易序列
-                if trade_sequence >= 2:
-                    trade_sequence = 0
-                    last_trade_signal = 0
+                self.log_and_print(f"检测到MT5自动平仓，原因: {close_reason}，执行后续交易: {next_signal}")
+                self.open_position(next_signal, latest_data)
+                # 重置交易序列和信号
+                trade_sequence = 0
+                last_trade_signal = 0
+                return True
 
         if current_position == 0:
             return False
@@ -769,7 +802,10 @@ class FTMORealTimeTrader:
                     signal, reasons = self.generate_real_time_signal(latest_data)
                     if signal != 0:
                         self.log_and_print(f"生成信号：{signal}，理由：{'; '.join(reasons)}")
+                        self.log_and_print(f"交易序列: {trade_sequence}, 上次信号: {last_trade_signal}, 上次平仓原因: '{last_close_reason}'")
                         self.open_position(signal, latest_data)
+                    else:
+                        self.log_and_print(f"无交易信号，原因：{'; '.join(reasons)}")
 
                 # 每分钟检查一次
                 self.log_and_print("等待下一次检查...")
