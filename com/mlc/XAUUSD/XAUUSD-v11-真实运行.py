@@ -67,6 +67,9 @@ class FTMORealTimeTrader:
         global last_close_reason
         last_close_reason = ""
 
+        # 初始化历史交易状态
+        self.initialize_trade_state_from_history()
+
         # 打印初始化信息
         self.log_and_print(f"初始化完成 - 交易品种: {SYMBOL}, 手数: {LOT_SIZE}, 合约大小: {self.contract_size}")
 
@@ -881,6 +884,57 @@ class FTMORealTimeTrader:
             self.log_and_print("交易结束，断开MT5连接")
             self.end_of_day_summary()
 
+    def initialize_trade_state_from_history(self):
+        """从历史交易记录初始化交易状态"""
+        global trade_sequence, last_trade_signal, last_close_reason, current_position
+        try:
+            # 获取最近30分钟的历史交易数据
+            to_time = datetime.now()
+            from_time = to_time - timedelta(minutes=30)
+            
+            # 获取历史交易记录
+            history_deals = mt5.history_deals_get(from_time, to_time)
+            
+            if history_deals is None or len(history_deals) == 0:
+                self.log_and_print("最近30分钟内无历史交易记录，使用默认初始化")
+                return
+            
+            # 过滤出当前交易对的交易，并按时间排序
+            symbol_deals = []
+            for deal in history_deals:
+                # 只考虑平仓交易（ DEAL_TYPE_BUY 或 DEAL_TYPE_SELL ）
+                if (hasattr(deal, 'symbol') and deal.symbol == SYMBOL and 
+                    hasattr(deal, 'type') and deal.type in [mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL]):
+                    symbol_deals.append(deal)
+            
+            # 按时间排序
+            symbol_deals.sort(key=lambda x: x.time)
+            
+            if len(symbol_deals) == 0:
+                self.log_and_print("最近30分钟内无相关平仓交易记录，使用默认初始化")
+                return
+            
+            # 获取最近的平仓交易
+            last_deal = symbol_deals[-1]
+            
+            # 检查是否包含必要的属性
+            if not hasattr(last_deal, 'profit'):
+                self.log_and_print("历史交易记录缺少盈利属性，使用默认初始化")
+                return
+            
+            # 根据最近平仓交易的盈亏情况设置last_close_reason
+            if last_deal.profit > 0:
+                last_close_reason = "止盈"
+                self.log_and_print(f"从历史交易初始化状态 - 上次平仓原因: {last_close_reason} (盈利: {last_deal.profit:.2f})")
+            elif last_deal.profit < 0:
+                last_close_reason = "止损"
+                self.log_and_print(f"从历史交易初始化状态 - 上次平仓原因: {last_close_reason} (亏损: {last_deal.profit:.2f})")
+            else:
+                last_close_reason = "平仓"
+                self.log_and_print(f"从历史交易初始化状态 - 上次平仓原因: {last_close_reason} (盈亏平衡: {last_deal.profit:.2f})")
+            
+        except Exception as e:
+            self.log_and_print(f"从历史交易初始化状态时出错: {str(e)}")
 
 if __name__ == "__main__":
     trader = FTMORealTimeTrader()
