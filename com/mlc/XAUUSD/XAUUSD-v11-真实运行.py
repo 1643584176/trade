@@ -401,6 +401,53 @@ class FTMORealTimeTrader:
 
         return None
 
+    def get_todays_history_trades(self):
+        """获取当天的历史交易数据并按时间排序"""
+        try:
+            # 获取今天的开始和结束时间
+            today = datetime.now().date()
+            from_time = datetime(today.year, today.month, today.day)
+            to_time = from_time + timedelta(days=1)
+            
+            # 获取历史交易
+            history_deals = mt5.history_deals_get(from_time, to_time)
+            
+            if history_deals is None or len(history_deals) == 0:
+                self.log_and_print("今日无历史交易记录")
+                return []
+            
+            # 过滤出当前交易对的交易，并按时间排序
+            symbol_deals = []
+            for deal in history_deals:
+                if hasattr(deal, 'symbol') and deal.symbol == SYMBOL:
+                    symbol_deals.append(deal)
+            
+            # 按时间排序
+            symbol_deals.sort(key=lambda x: x.time)
+            
+            self.log_and_print(f"今日{SYMBOL}历史交易记录数量: {len(symbol_deals)}")
+            return symbol_deals
+            
+        except Exception as e:
+            self.log_and_print(f"获取历史交易数据时出错: {str(e)}")
+            return []
+
+    def is_last_trade_profitable(self, history_trades):
+        """检查最近一笔交易是否盈利"""
+        if not history_trades:
+            return False
+            
+        # 获取最近一笔交易
+        last_trade = history_trades[-1]
+        
+        # 检查是否盈利
+        if hasattr(last_trade, 'profit'):
+            is_profit = last_trade.profit > 0
+            self.log_and_print(f"最近一笔交易盈亏: {last_trade.profit:.2f}, 盈利: {is_profit}")
+            return is_profit
+            
+        return False
+
     def generate_real_time_signal(self, latest_data):
         global trade_sequence, last_trade_signal, last_close_reason
         df = historical_data
@@ -475,6 +522,14 @@ class FTMORealTimeTrader:
                 # 止损后顺着原方向交易或默认信号
                 signal = last_trade_signal
                 reasons.append(f"止损后顺势交易({signal})")
+
+        # 添加根据当日历史交易数据决定是否反向的逻辑
+        history_trades = self.get_todays_history_trades()
+        if len(history_trades) > 0:
+            if self.is_last_trade_profitable(history_trades):
+                # 如果最近一笔交易盈利，则反向
+                signal = -signal if signal != 0 else signal
+                reasons.append(f"基于历史交易盈利反向({signal})")
 
         if len(reasons) < 1:
             signal = 0
