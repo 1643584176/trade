@@ -6,6 +6,9 @@ import MetaTrader5 as mt5
 import logging
 import os
 
+# 导入时间工具类
+from com.mlc.utils.time_utils import TimeUtils
+
 # 配置日志
 logging.basicConfig(
     filename='trading_log.log',
@@ -45,9 +48,59 @@ last_close_reason = ""  # 上一次平仓原因
 # 全局交易状态变量
 current_position_ticket = None
 
+
 class FTMORealTimeTrader:
+    """
+    FTMO实时交易策略类
+    实现基于技术分析的黄金交易策略，包括风控管理、信号生成、订单执行等功能
+    """
+    
+    def wait_for_latest_data(self, max_wait_time=300):
+        """
+        等待直到获取到最新的K线数据
+        避免使用过时的数据进行交易决策
+        
+        Args:
+            max_wait_time (int): 最大等待时间（秒），默认5分钟
+        """
+        start_time = time.time()
+        first_check = True
+        while time.time() - start_time < max_wait_time:
+            try:
+                # 获取最新的H1 K线数据
+                rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_H1, 0, 2)
+                if rates is not None and len(rates) >= 2:
+                    # 使用时间工具类检查最新K线时间
+                    latest_time = TimeUtils.mt5_timestamp_to_datetime(rates[0]['time'])
+                    current_time = datetime.now()
+                    time_diff = (current_time - latest_time).total_seconds()
+                    
+                    # 如果最新K线时间在合理范围内（1小时内），则认为是最新数据
+                    if time_diff < 3600 and time_diff > 0:
+                        self.log_and_print(f"已获取到最新H1数据，最新K线时间: {TimeUtils.datetime_to_string(latest_time, True)}")
+                        return True
+                    else:
+                        if first_check:
+                            self.log_and_print(f"等待最新H1数据... 最新K线时间: {TimeUtils.datetime_to_string(latest_time, True)}, 时间差: {time_diff/60:.2f}分钟")
+                            first_check = False
+                                
+                        time.sleep(10)  # 等待10秒后重试
+            except Exception as e:
+                self.log_and_print(f"等待最新数据时发生错误: {str(e)}")
+                time.sleep(10)
+                
+        self.log_and_print(f"警告：等待最新H1数据超时 ({max_wait_time}秒)")
+        return False
+
     def __init__(self):
+        """
+        初始化交易策略
+        连接MT5平台，加载初始数据，设置交易参数
+        """
         self.connect_mt5()
+        self.check_mt5_time_sync()
+        # 等待获取最新数据
+        self.wait_for_latest_data()
         self.load_initial_data()
         self.reset_daily_stats()
         # 获取点值和合约大小（用于计算盈亏）
@@ -73,28 +126,74 @@ class FTMORealTimeTrader:
         # 打印初始化信息
         self.log_and_print(f"初始化完成 - 交易品种: {SYMBOL}, 手数: {LOT_SIZE}, 合约大小: {self.contract_size}")
 
+    def check_mt5_time_sync(self):
+        """
+        检查MT5时间与本地时间的同步性
+        通过获取最新的M1 K线时间与本地时间进行比较
+        根据用户建议，在交易日MT5最新M1 K线时间应该比北京时间少5小时
+        """
+        try:
+            # 使用时间工具类获取最新的M1 K线时间
+            mt5_time, beijing_time = TimeUtils.get_latest_m1_time(SYMBOL)
+            
+            if mt5_time is None or beijing_time is None:
+                self.log_and_print("警告：无法获取MT5的M1数据进行时间同步检查")
+                return
+
+            # 获取本地时间（北京时间）
+            local_time = datetime.now()
+            
+            # 计算时间差（秒）
+            time_diff = (local_time - mt5_time).total_seconds()
+            
+            self.log_and_print(f"时间同步检查 - MT5时间: {TimeUtils.datetime_to_string(mt5_time, True)}, 北京时间: {TimeUtils.datetime_to_string(local_time, True)}, 差值: {time_diff:.2f}秒")
+            
+            # 在交易日，MT5时间（通常是UTC+2）应该比北京时间（UTC+8）少6小时（21600秒）
+            # 但考虑到夏令时等因素，我们允许一定的偏差范围
+            expected_diff = 6 * 3600  # 6小时
+            diff_tolerance = 3600      # 1小时容差
+            
+            if abs(time_diff - expected_diff) > diff_tolerance:
+                self.log_and_print(f"警告：MT5时间与北京时间差异不符合预期 (预期差值: {expected_diff}秒, 实际差值: {time_diff:.2f}秒)")
+                
+        except Exception as e:
+            self.log_and_print(f"时间同步检查时发生错误: {str(e)}")
+
     def get_current_time(self):
-        """获取MT5服务器时间"""
+        """
+        获取MT5服务器时间
+        
+        Returns:
+            str: 格式化的时间字符串（精确到毫秒）
+        """
         try:
             # 获取当前报价，其中包含服务器时间
             tick = mt5.symbol_info_tick(SYMBOL)
             if tick is not None:
-                server_time = datetime.fromtimestamp(tick.time).strftime('%Y-%m-%d %H:%M:%S')
-                return server_time
+                server_time = TimeUtils.mt5_timestamp_to_datetime(tick.time)
+                return TimeUtils.datetime_to_string(server_time, True)
             else:
                 return "获取服务器时间失败"
         except Exception as e:
             return f"获取服务器时间异常: {str(e)}"
 
     def log_and_print(self, message):
-        """同时打印到控制台和日志文件"""
+        """
+        同时打印到控制台和日志文件
+        
+        Args:
+            message (str): 要记录的消息
+        """
         # 使用MT5服务器时间
         server_time = self.get_current_time()
         print(f"{server_time} {message}")
         logging.info(f"{server_time} {message}")
 
     def connect_mt5(self):
-        """连接MT5平台"""
+        """
+        连接MT5平台
+        初始化MT5连接，检查连接状态和交易品种
+        """
         if not mt5.initialize():
             error_msg = "MT5初始化失败"
             print(f"[{self.get_current_time()}] {error_msg}")
@@ -130,9 +229,15 @@ class FTMORealTimeTrader:
         logging.info(f"交易品种{SYMBOL}已就绪")
 
     def load_initial_data(self):
-        """加载初始历史数据"""
+        """
+        加载初始历史数据
+        获取最近30根H1 K线数据并转换为DataFrame格式
+        """
         global historical_data
         try:
+            # 先检查MT5时间同步
+            self.check_mt5_time_sync()
+            
             # 获取最近30根H1 K线数据
             rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_H1, 0, 30)
             if rates is None or len(rates) == 0:
@@ -143,8 +248,24 @@ class FTMORealTimeTrader:
 
             # 转换为DataFrame
             df = pd.DataFrame(rates)
-            df['time'] = pd.to_datetime(df['time'], unit='s')
+            # 使用时间工具类进行时间转换（与不同币种查询历史数据.py保持一致）
+            df['time'] = TimeUtils.mt5_timestamp_to_datetime(df['time'])
             df.set_index('time', inplace=True)
+            
+            # 检查最新K线时间是否合理
+            latest_time = df.index[-1]
+            current_time = datetime.now()
+            time_diff = (current_time - latest_time).total_seconds()
+            
+            # 如果最新K线时间与当前时间相差超过24小时，抛出异常
+            if time_diff > 86600:  # 24小时
+                error_msg = f"最新K线时间 ({TimeUtils.datetime_to_string(latest_time, True)}) 与当前时间差异过大 ({time_diff/3600:.2f}小时)，请检查MT5连接或数据源"
+                self.log_and_print(error_msg)
+                raise Exception(error_msg)
+            
+            # 如果最新K线时间与当前时间相差超过2小时，发出警告
+            if time_diff > 7200:  # 2小时
+                self.log_and_print(f"警告：最新K线时间 ({TimeUtils.datetime_to_string(latest_time, True)}) 与当前时间差异较大 ({time_diff/3600:.2f}小时)")
             
             # 重命名列以匹配现有代码
             df.rename(columns={
@@ -199,11 +320,13 @@ class FTMORealTimeTrader:
             latest_time = df.index[-1]
             # 确保latest_time是datetime类型
             if isinstance(latest_time, pd.Timestamp):
-                print(f"[{self.get_current_time()}] 初始数据加载完成，共{len(df)}根H1 K线，最新K线服务器时间: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
-                logging.info(f"初始数据加载完成，共{len(df)}根H1 K线，最新K线服务器时间: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                formatted_time = TimeUtils.datetime_to_string(latest_time, True)
+                print(f"[{self.get_current_time()}] 初始数据加载完成，共{len(df)}根H1 K线，最新K线服务器时间: {formatted_time}")
+                logging.info(f"初始数据加载完成，共{len(df)}根H1 K线，最新K线服务器时间: {formatted_time}")
             else:
-                print(f"[{self.get_current_time()}] 初始数据加载完成，共{len(df)}根H1 K线，最新K线服务器时间: {latest_time}")
-                logging.info(f"初始数据加载完成，共{len(df)}根H1 K线，最新K线服务器时间: {latest_time}")
+                formatted_time = TimeUtils.datetime_to_string(latest_time, True)
+                print(f"[{self.get_current_time()}] 初始数据加载完成，共{len(df)}根H1 K线，最新K线服务器时间: {formatted_time}")
+                logging.info(f"初始数据加载完成，共{len(df)}根H1 K线，最新K线服务器时间: {formatted_time}")
             
         except Exception as e:
             error_msg = f"加载初始数据时发生错误: {str(e)}"
@@ -212,7 +335,10 @@ class FTMORealTimeTrader:
             raise
 
     def reset_daily_stats(self):
-        """重置每日统计"""
+        """
+        重置每日统计
+        将当日交易次数和亏损重置为初始值
+        """
         global daily_trades, daily_loss
         daily_trades = 0
         daily_loss = 0.0
@@ -220,7 +346,10 @@ class FTMORealTimeTrader:
         logging.info(f"当日交易统计重置：今日交易次数={daily_trades}，当日亏损={daily_loss:.2f}美元")
 
     def update_real_time_data(self):
-        """更新实时数据"""
+        """
+        更新实时数据
+        获取最新的已完成K线数据并更新指标计算
+        """
         global historical_data
         try:
             # 获取最新的2根K线数据（确保当前K线已完成）
@@ -230,8 +359,25 @@ class FTMORealTimeTrader:
 
             # 转换为DataFrame
             df = pd.DataFrame(rates)
-            df['time'] = pd.to_datetime(df['time'], unit='s')
+            # 使用时间工具类进行时间转换（与不同币种查询历史数据.py保持一致）
+            df['time'] = TimeUtils.mt5_timestamp_to_datetime(df['time'])
             df.set_index('time', inplace=True)
+            
+            # 检查最新K线时间是否合理
+            latest_time = df.index[0]  # 最新完成的K线
+            current_time = datetime.now()
+            time_diff = (current_time - latest_time).total_seconds()
+            
+            # 如果最新K线时间与当前时间相差超过24小时，记录错误并返回
+            if time_diff > 86400:  # 24小时
+                error_msg = f"最新K线时间 ({TimeUtils.datetime_to_string(latest_time, True)}) 与当前时间差异过大 ({time_diff/3600:.2f}小时)，请检查MT5连接或数据源"
+                self.log_and_print(error_msg)
+                logging.error(error_msg)
+                return
+            
+            # 如果最新K线时间与当前时间相差超过2小时，发出警告
+            if time_diff > 7200:  # 2小时
+                self.log_and_print(f"警告：最新K线时间 ({TimeUtils.datetime_to_string(latest_time, True)}) 与当前时间差异较大 ({time_diff/3600:.2f}小时)")
             
             # 重命名列
             df.rename(columns={
@@ -299,10 +445,21 @@ class FTMORealTimeTrader:
             logging.error(error_msg)
 
     def calculate_indicators(self):
-        """计算实时指标"""
+        """
+        计算实时指标
+        基于最新的历史数据计算各种技术指标
+        
+        Returns:
+            pandas.Series: 最新K线的数据
+        """
         global historical_data
         try:
             df = historical_data.copy()
+            
+            # 检查数据是否为空
+            if df.empty:
+                self.log_and_print("警告：历史数据为空，无法计算指标")
+                return None
             
             # 计算周间趋势
             if len(df) >= 5:
@@ -326,7 +483,10 @@ class FTMORealTimeTrader:
             return None
 
     def log_current_position_info(self):
-        """记录当前持仓信息以增加透明度"""
+        """
+        记录当前持仓信息以增加透明度
+        显示当前持仓状态、价格和浮动盈亏等信息
+        """
         global current_position, entry_price, entry_time, daily_trades
         
         # 获取MT5实际持仓信息
@@ -361,6 +521,15 @@ class FTMORealTimeTrader:
             self.log_and_print(f"MT5持仓信息: 未找到订单号 {self.current_position_ticket} 的持仓")
 
     def get_session_type(self, hour):
+        """
+        获取交易时段类型
+        
+        Args:
+            hour (int): 小时数
+            
+        Returns:
+            str: 交易时段类型 ("亚洲", "欧洲", "美洲" 或 "其他")
+        """
         if 0 <= hour <= 6:
             return "亚洲"
         elif 7 <= hour <= 14:
@@ -370,6 +539,15 @@ class FTMORealTimeTrader:
         return "其他"
 
     def is_reversal_pattern(self, latest_data):
+        """
+        判断是否存在反转K线形态
+        
+        Args:
+            latest_data (pandas.Series): 最新K线数据
+            
+        Returns:
+            str or None: "bullish"表示看涨反转，"bearish"表示看跌反转，None表示无反转形态
+        """
         df = historical_data
         idx = len(df) - 1  # 使用索引位置而不是时间戳
         if idx < 2:
@@ -405,7 +583,12 @@ class FTMORealTimeTrader:
         return None
 
     def get_todays_history_trades(self):
-        """获取当天的历史交易数据并按时间排序"""
+        """
+        获取当天的历史交易数据并按时间排序
+        
+        Returns:
+            list: 当天的历史交易记录列表
+        """
         try:
             # 获取今天的开始和结束时间
             today = datetime.now().date()
@@ -436,7 +619,15 @@ class FTMORealTimeTrader:
             return []
 
     def is_last_trade_profitable(self, history_trades):
-        """检查最近一笔交易是否盈利"""
+        """
+        检查最近一笔交易是否盈利
+        
+        Args:
+            history_trades (list): 历史交易记录列表
+            
+        Returns:
+            tuple: (是否盈利, 平仓原因)
+        """
         if not history_trades:
             return False, None
             
@@ -453,6 +644,16 @@ class FTMORealTimeTrader:
         return False, None
 
     def generate_real_time_signal(self, latest_data):
+        """
+        生成实时交易信号
+        
+        Args:
+            latest_data (pandas.Series): 最新K线数据
+            
+        Returns:
+            tuple: (信号值, 信号原因列表)
+                   信号值: 1表示买入，-1表示卖出，0表示无信号
+        """
         global trade_sequence, last_trade_signal, last_close_reason
         df = historical_data
         weekday_num = latest_data["星期数"]
@@ -466,8 +667,9 @@ class FTMORealTimeTrader:
         avg_atr = df["ATR"].mean() if not df["ATR"].isna().all() else 0.0
 
         # 显示信号分析时间和相关信息
-        latest_time = latest_data["时间点"].strftime('%Y-%m-%d %H:%M:%S')
-        self.log_and_print(f"信号分析 - K线时间: {latest_time}, 时段: {session_type}, 星期: {weekday_num}, 小时: {hour}")
+        latest_time = latest_data["时间点"]
+        formatted_time = TimeUtils.datetime_to_string(latest_time, True)
+        self.log_and_print(f"信号分析 - K线时间: {formatted_time}, 时段: {session_type}, 星期: {weekday_num}, 小时: {hour}")
         self.log_and_print(f"开仓方向: {open_direction}, 1周期动量: {momentum_1}, 3周期动量: {momentum_3}, ATR: {atr:.4f}")
         # 增加持仓信息透明度
         self.log_current_position_info()
@@ -545,7 +747,19 @@ class FTMORealTimeTrader:
         return signal, reasons
 
     def send_order(self, action, volume, price, sl=0, tp=0):
-        """发送交易订单"""
+        """
+        发送交易订单
+        
+        Args:
+            action (int): 交易方向，1表示买入，-1表示卖出
+            volume (float): 交易手数
+            price (float): 交易价格
+            sl (float): 止损价格，默认为0
+            tp (float): 止盈价格，默认为0
+            
+        Returns:
+            bool: 订单发送是否成功
+        """
         # 检查MT5连接状态
         terminal_info = mt5.terminal_info()
         if terminal_info is None or not terminal_info.connected:
@@ -601,7 +815,16 @@ class FTMORealTimeTrader:
         return True
 
     def open_position(self, signal, latest_data):
-        """开仓操作"""
+        """
+        开仓操作
+        
+        Args:
+            signal (int): 交易信号，1表示买入，-1表示卖出
+            latest_data (pandas.Series): 最新K线数据
+            
+        Returns:
+            bool: 开仓是否成功
+        """
         global current_position, entry_price, entry_time, daily_trades, trade_sequence, last_trade_signal
 
         # 获取当前市场价格
@@ -653,7 +876,15 @@ class FTMORealTimeTrader:
         return False
 
     def close_position(self, reason="策略平仓"):
-        """平仓操作"""
+        """
+        平仓操作
+        
+        Args:
+            reason (str): 平仓原因，默认为"策略平仓"
+            
+        Returns:
+            bool: 平仓是否成功
+        """
         global current_position, entry_price, entry_time, daily_loss, total_loss, consecutive_losses
         
         if current_position == 0:
@@ -739,7 +970,15 @@ class FTMORealTimeTrader:
         return True
 
     def check_close_conditions(self, latest_data):
-        """检查平仓条件"""
+        """
+        检查平仓条件
+        
+        Args:
+            latest_data (pandas.Series): 最新K线数据
+            
+        Returns:
+            bool: 是否执行了平仓操作
+        """
         global current_position, entry_price, entry_time
 
         # 检查MT5实际持仓状态，同步内部状态
@@ -816,7 +1055,9 @@ class FTMORealTimeTrader:
         return False
 
     def end_of_day_summary(self):
-        """输出每日交易统计信息"""
+        """
+        输出每日交易统计信息
+        """
         global daily_trades, daily_loss
         self.log_and_print("\n当日交易总结：")
         self.log_and_print(f"- 总交易次数: {daily_trades}")
@@ -827,9 +1068,15 @@ class FTMORealTimeTrader:
         daily_loss = 0.0
 
     def run(self):
-        """运行实时交易策略"""
+        """
+        运行实时交易策略
+        主循环，负责风控检查、数据更新、信号生成和订单执行
+        """
         self.log_and_print("开始实时交易...")
         try:
+            # 标记是否已获取到最新数据
+            has_latest_data = False
+            
             while True:
                 # 检查风控限制
                 if total_loss >= TOTAL_MAX_LOSS:
@@ -859,12 +1106,30 @@ class FTMORealTimeTrader:
                 # 更新数据和指标
                 self.update_real_time_data()
                 latest_data = self.calculate_indicators()
-
+                
+                # 检查是否获取到最新数据
+                if latest_data is not None:
+                    latest_kline_time = latest_data["时间点"]
+                    current_time = datetime.now()
+                    time_diff = (current_time - latest_kline_time).total_seconds()
+                    
+                    # 如果最新K线时间在合理范围内（2小时内），标记为已获取最新数据
+                    if time_diff < 7200 and time_diff > 0:
+                        has_latest_data = True
+                    else:
+                        # 如果未获取到最新数据，等待一段时间
+                        if not has_latest_data:
+                            formatted_time = TimeUtils.datetime_to_string(latest_kline_time, True)
+                            self.log_and_print(f"等待获取最新H1数据... 当前K线时间: {formatted_time}")
+                            has_latest_data = True  # 只显示一次等待信息
+                            time.sleep(60)
+                            continue
+                
                 # 检查平仓条件
                 self.check_close_conditions(latest_data)
 
                 # 开仓逻辑
-                if current_position == 0 and daily_trades < MAX_DAILY_TRADES:
+                if current_position == 0 and daily_trades < MAX_DAILY_TRADES and has_latest_data:
                     signal, reasons = self.generate_real_time_signal(latest_data)
                     if signal != 0:
                         self.log_and_print(f"生成信号：{signal}，理由：{'; '.join(reasons)}")
@@ -872,6 +1137,8 @@ class FTMORealTimeTrader:
                         self.open_position(signal, latest_data)
                     else:
                         self.log_and_print(f"无交易信号，原因：{'; '.join(reasons)}")
+                elif not has_latest_data:
+                    self.log_and_print("等待获取最新数据，暂不进行交易决策")
 
                 # 每分钟检查一次
                 self.log_and_print("等待下一次检查...")
@@ -893,7 +1160,10 @@ class FTMORealTimeTrader:
             self.end_of_day_summary()
 
     def initialize_trade_state_from_history(self):
-        """从历史交易记录初始化交易状态"""
+        """
+        从历史交易记录初始化交易状态
+        通过检查最近的交易记录来恢复策略状态
+        """
         global trade_sequence, last_trade_signal, last_close_reason, current_position
         try:
             # 获取最近30分钟的历史交易数据
