@@ -11,7 +11,7 @@ from com.mlc.utils.time_utils import TimeUtils
 
 # 配置日志
 logging.basicConfig(
-    filename='trading_log.log',
+    filename='../trading_log.log',
     level=logging.INFO,
     format='%(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
