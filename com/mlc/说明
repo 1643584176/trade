@@ -1,0 +1,12 @@
+EURUSD
+Version: 1.0.0
+1.当前币种名称：EURUSD,只单独满足FTMO规则,回测流程,文件名称:v1.EURUSD.py
+
+GBPUSD
+Version: 1.0.0
+1.当前币种名称：GBPUSD,只单独满足FTMO规则,回测流程,文件名称:v1.GBPUSD.py
+
+XAUUSD
+Version: 1.0.0
+1.当前币种名称：XAUUSD,只单独满足FTMO规则,回测流程,文件名称:v1.XAUUSD.py
+
