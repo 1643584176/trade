@@ -32,6 +32,15 @@ def run_eurusd_strategy():
     except Exception as e:
         print(f"EURUSD策略执行过程中发生错误: {str(e)}")
 
+def run_usdjpy_strategy():
+    """运行USDJPY策略"""
+    try:
+        from USDJPY.USDJPY真实运行 import run_strategy as usdjpy_run_strategy
+        usdjpy_run_strategy()
+    except Exception as e:
+        print(f"USDJPY策略执行过程中发生错误: {str(e)}")
+
+
 def run_xauusd_strategy():
     """运行XAUUSD策略"""
     try:
@@ -40,6 +49,8 @@ def run_xauusd_strategy():
         trader.run()
     except Exception as e:
         print(f"XAUUSD策略执行过程中发生错误: {str(e)}")
+
+
 
 def monitor_global_state():
     """监控全局状态"""
@@ -90,6 +101,10 @@ def main():
     # 创建并启动EURUSD策略线程
     eurusd_thread = threading.Thread(target=run_eurusd_strategy, name="EURUSD_Thread")
     eurusd_thread.daemon = True  # 设置为守护线程
+
+    # 创建并启动USDJPY策略线程
+    usdjpy_thread = threading.Thread(target=run_usdjpy_strategy, name="USDJPY_Thread")
+    usdjpy_thread.daemon = True  # 设置为守护线程
     
     # # 创建并启动XAUUSD策略线程
     # xauusd_thread = threading.Thread(target=run_xauusd_strategy, name="XAUUSD_Thread")
@@ -102,6 +117,7 @@ def main():
     # 启动所有线程
     gbpusd_thread.start()
     eurusd_thread.start()
+    usdjpy_thread.start()
     # xauusd_thread.start()
     monitor_thread.start()
     
