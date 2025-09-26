@@ -118,6 +118,9 @@ def get_historical_data(symbol, timeframe, timeframe_str):
             '时间点', '星期几', '昨天增减', '昨日波动幅度',
             '当前开盘价', '当前收盘价', '当前最高价', '当前最低价', '当前增减', '当前波动幅度'
         ]].round(6)
+        
+        # 过滤掉2024年1月2日的数据
+        result = result[result['时间点'].dt.date != datetime(2024, 1, 2).date()]
 
         return result
 
