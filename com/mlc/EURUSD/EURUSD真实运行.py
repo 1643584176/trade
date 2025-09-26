@@ -207,10 +207,10 @@ def initialize_trading_day():
                 if hasattr(order, 'profit') and order.profit is not None:
                     daily_pnl += order.profit
                     
-        print(f"今日{symbol}交易次数初始化: {daily_trades}, 今日盈亏: {daily_pnl:.2f}")
+        print(f"[EURUSD] 今日{symbol}交易次数初始化: {daily_trades}, 今日盈亏: {daily_pnl:.2f}")
         
     except Exception as e:
-        print(f"初始化交易日时发生错误: {str(e)}")
+        print(f"[EURUSD] 初始化交易日时发生错误: {str(e)}")
 
 def check_position_status():
     """检查当前持仓状态"""
@@ -240,7 +240,7 @@ def check_position_status():
                             current_balance += order.profit
                             daily_pnl += order.profit
                             total_pnl += order.profit
-                            print(f"检测到外部平仓，盈亏: {order.profit:.2f}, 余额: {current_balance:.2f}, 今日交易次数: {daily_trades}")
+                            print(f"[EURUSD] 检测到外部平仓，盈亏: {order.profit:.2f}, 余额: {current_balance:.2f}, 今日交易次数: {daily_trades}")
                             break
             
             # 重置持仓状态
@@ -250,10 +250,10 @@ def check_position_status():
         # 如果有持仓但程序认为没有持仓，说明是外部开仓
         elif positions is not None and len(positions) > 0 and current_position is None:
             position = positions[0]
-            print(f"检测到外部开仓，订单号: {position.ticket}, 方向: {'多' if position.type == 0 else '空'}, 手数: {position.volume}")
+            print(f"[EURUSD] 检测到外部开仓，订单号: {position.ticket}, 方向: {'多' if position.type == 0 else '空'}, 手数: {position.volume}")
             
     except Exception as e:
-        print(f"检查持仓状态时发生错误: {str(e)}")
+        print(f"[EURUSD] 检查持仓状态时发生错误: {str(e)}")
 
 def print_time_info():
     """打印M1和H1时间信息"""
@@ -264,47 +264,47 @@ def print_time_info():
         if m1_rates is not None and len(m1_rates) > 0:
             m1_time = TimeUtils.mt5_timestamp_to_datetime(m1_rates[0]['time'])
             beijing_time = TimeUtils.mt5_time_to_beijing_time(m1_time)
-            print(f"MT5 M1时间: {TimeUtils.datetime_to_string(m1_time, True)}, 北京时间: {TimeUtils.datetime_to_string(beijing_time, True)}")
+            print(f"[EURUSD] MT5 M1时间: {TimeUtils.datetime_to_string(m1_time, True)}, 北京时间: {TimeUtils.datetime_to_string(beijing_time, True)}")
         
         # 获取H1最新时间
         h1_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 1)
         if h1_rates is not None and len(h1_rates) > 0:
             h1_time = TimeUtils.mt5_timestamp_to_datetime(h1_rates[0]['time'])
             beijing_time = TimeUtils.mt5_time_to_beijing_time(h1_time)
-            print(f"MT5 H1时间: {TimeUtils.datetime_to_string(h1_time, True)}, 北京时间: {TimeUtils.datetime_to_string(beijing_time, True)}")
+            print(f"[EURUSD] MT5 H1时间: {TimeUtils.datetime_to_string(h1_time, True)}, 北京时间: {TimeUtils.datetime_to_string(beijing_time, True)}")
             
     except Exception as e:
-        print(f"获取时间信息时发生错误: {str(e)}")
+        print(f"[EURUSD] 获取时间信息时发生错误: {str(e)}")
 
 def send_order(direction, lot_size, sl, tp, price):
     """发送真实订单到MT5"""
     try:
         # 验证价格参数
         if price is None or sl is None or tp is None:
-            print("订单价格参数无效")
+            print("[EURUSD] 订单价格参数无效")
             return None
             
         # 验证手数
         if lot_size <= 0:
-            print("订单手数必须大于0")
+            print("[EURUSD] 订单手数必须大于0")
             return None
             
         # 获取交易品种信息
         symbol_info = mt5.symbol_info(symbol)
         if symbol_info is None:
-            print(f"无法获取交易品种 {symbol} 的信息")
+            print(f"[EURUSD] 无法获取交易品种 {symbol} 的信息")
             return None
             
         # 检查交易品种是否可用
         if not symbol_info.visible:
             if not mt5.symbol_select(symbol, True):
-                print(f"无法选择交易品种 {symbol}")
+                print(f"[EURUSD] 无法选择交易品种 {symbol}")
                 return None
                 
         # 检查价格是否合理
         tick = mt5.symbol_info_tick(symbol)
         if tick is None:
-            print("无法获取当前报价")
+            print("[EURUSD] 无法获取当前报价")
             return None
             
         # 根据方向设置订单类型
@@ -312,13 +312,13 @@ def send_order(direction, lot_size, sl, tp, price):
             order_type = mt5.ORDER_TYPE_BUY
             # 检查止损和止盈是否合理 (多单止损应低于入场价，止盈应高于入场价)
             if sl >= price or tp <= price:
-                print(f"多单止损或止盈价格设置不合理: 入场价={price}, 止损={sl}, 止盈={tp}")
+                print(f"[EURUSD] 多单止损或止盈价格设置不合理: 入场价={price}, 止损={sl}, 止盈={tp}")
                 return None
         else:
             order_type = mt5.ORDER_TYPE_SELL
             # 检查止损和止盈是否合理 (空单止损应高于入场价，止盈应低于入场价)
             if sl <= price or tp >= price:
-                print(f"空单止损或止盈价格设置不合理: 入场价={price}, 止损={sl}, 止盈={tp}")
+                print(f"[EURUSD] 空单止损或止盈价格设置不合理: 入场价={price}, 止损={sl}, 止盈={tp}")
                 return None
             
         # 准备订单请求
@@ -338,21 +338,21 @@ def send_order(direction, lot_size, sl, tp, price):
         }
         
         # 打印下单信息
-        print(f"准备下单: 品种={symbol}, 方向={direction}, 手数={lot_size}, 入场价={price}, 止损={sl}, 止盈={tp}")
+        print(f"[EURUSD] 准备下单: 品种={symbol}, 方向={direction}, 手数={lot_size}, 入场价={price}, 止损={sl}, 止盈={tp}")
         
         # 发送订单
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            print(f"订单发送失败，错误码: {result.retcode}")
+            print(f"[EURUSD] 订单发送失败，错误码: {result.retcode}")
             # 打印更多错误信息帮助诊断
-            print(f"错误详情: {mt5.last_error()}")
+            print(f"[EURUSD] 错误详情: {mt5.last_error()}")
             return None
             
-        print(f"订单发送成功，订单号: {result.order}")
+        print(f"[EURUSD] 订单发送成功，订单号: {result.order}")
         return result.order
         
     except Exception as e:
-        print(f"发送订单时发生错误: {str(e)}")
+        print(f"[EURUSD] 发送订单时发生错误: {str(e)}")
         return None
 
 def close_position(ticket):
@@ -361,7 +361,7 @@ def close_position(ticket):
         # 获取当前持仓信息
         positions = mt5.positions_get(ticket=ticket)
         if positions is None or len(positions) == 0:
-            print("未找到持仓")
+            print("[EURUSD] 未找到持仓")
             return False
             
         position = positions[0]
@@ -389,14 +389,14 @@ def close_position(ticket):
         # 发送平仓请求
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            print(f"平仓失败，错误码: {result.retcode}")
+            print(f"[EURUSD] 平仓失败，错误码: {result.retcode}")
             return False
             
-        print(f"平仓成功，订单号: {result.order}")
+        print(f"[EURUSD] 平仓成功，订单号: {result.order}")
         return True
         
     except Exception as e:
-        print(f"平仓时发生错误: {str(e)}")
+        print(f"[EURUSD] 平仓时发生错误: {str(e)}")
         return False
 
 # ======================== 4. 核心交易逻辑 ========================
@@ -464,9 +464,9 @@ def run_strategy():
                 # 星期映射: 0=星期一, 1=星期二, 2=星期三, 3=星期四, 4=星期五, 5=星期六, 6=星期日
                 weekday_num = m1_time.weekday()
                 weekday_chinese = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'][weekday_num]
-                print(f"M1时间: {TimeUtils.datetime_to_string(m1_time, True)}, 北京时间: {TimeUtils.datetime_to_string(beijing_time, True)}, 星期: {weekday_chinese}({weekday_num})")
+                print(f"[EURUSD] M1时间: {TimeUtils.datetime_to_string(m1_time, True)}, 北京时间: {TimeUtils.datetime_to_string(beijing_time, True)}, 星期: {weekday_chinese}({weekday_num})")
             else:
-                print("无法获取M1时间信息")
+                print("[EURUSD] 无法获取M1时间信息")
 
             # 每日初始化（新交易日重置统计）
             if shared_state.check_daily_reset(current_date):
@@ -482,7 +482,7 @@ def run_strategy():
                 current_lot = 0.0
                 # 获取全局状态信息用于输出
                 global_stats = shared_state.get_global_stats()
-                print(f"风险控制限制开仓: 当前手数={current_lot}, 全局当日盈亏={global_stats['daily_pnl']:.2f}, 全局总盈亏={global_stats['total_pnl']:.2f}, 全局净值={global_stats['equity']:.2f}")
+                print(f"[EURUSD] 风险控制限制开仓: 当前手数={current_lot}, 全局当日盈亏={global_stats['daily_pnl']:.2f}, 全局总盈亏={global_stats['total_pnl']:.2f}, 全局净值={global_stats['equity']:.2f}")
             else:
                 current_lot = adjust_lot_size(latest_data, latest_data['past_week_vol'])
                 
@@ -497,7 +497,7 @@ def run_strategy():
                     latest_h1_time = latest_data['时间'].replace(minute=0, second=0, microsecond=0)
                     # 如果上次平仓时间在当前K线周期内，则跳过开仓
                     if last_close_time >= latest_h1_time:
-                        print(f"上次平仓时间 {last_close_time} 在当前K线周期内，等待下一根完整K线")
+                        print(f"[EURUSD] 上次平仓时间 {last_close_time} 在当前K线周期内，等待下一根完整K线")
                         time.sleep(60)
                         continue
                 
@@ -517,7 +517,7 @@ def run_strategy():
                 yesterday_weekday_chinese = weekday_names[yesterday_weekday]
                 current_weekday_chinese = weekday_names[current_weekday]
                 
-                print(f"分析H1数据信号: 昨天星期={yesterday_weekday_chinese}, 今天星期={current_weekday_chinese}")
+                print(f"[EURUSD] 分析H1数据信号: 昨天星期={yesterday_weekday_chinese}, 今天星期={current_weekday_chinese}")
                 
                 # 1. 周一→周二趋势延续
                 if prev_data['星期几'] == 'Monday' and latest_data['星期几'] == 'Tuesday':
@@ -527,7 +527,7 @@ def run_strategy():
                             latest_data['增减'] > 0):
                         signal_type = "周一上涨周二延续"
                         direction = "long"
-                        print(f"满足做多条件: 周一上涨周二延续 - 昨天增减={prev_data['昨天增减']:.5f}, 价格跳空={latest_data['开盘价'] > prev_data['收盘价']}, 当前上涨={latest_data['增减'] > 0}")
+                        print(f"[EURUSD] 满足做多条件: 周一上涨周二延续 - 昨天增减={prev_data['昨天增减']:.5f}, 价格跳空={latest_data['开盘价'] > prev_data['收盘价']}, 当前上涨={latest_data['增减'] > 0}")
 
                     # 周一下跌→周二延续：做空
                     elif (prev_data['昨天增减'] < 0 and
@@ -535,7 +535,7 @@ def run_strategy():
                           latest_data['增减'] < 0):
                         signal_type = "周一下跌周二延续"
                         direction = "short"
-                        print(f"满足做空条件: 周一下跌周二延续 - 昨天增减={prev_data['昨天增减']:.5f}, 价格跳空={latest_data['开盘价'] < prev_data['收盘价']}, 当前下跌={latest_data['增减'] < 0}")
+                        print(f"[EURUSD] 满足做空条件: 周一下跌周二延续 - 昨天增减={prev_data['昨天增减']:.5f}, 价格跳空={latest_data['开盘价'] < prev_data['收盘价']}, 当前下跌={latest_data['增减'] < 0}")
                     else:
                         signal_reasons.append(f"周一→周二: 昨天增减={prev_data['昨天增减']:.5f}, 跳空={latest_data['开盘价'] > prev_data['收盘价']}, 当前涨跌={latest_data['增减'] > 0}")
 
@@ -548,7 +548,7 @@ def run_strategy():
                             latest_data['增减'] > 0):
                         signal_type = "周三反转做多"
                         direction = "long"
-                        print(f"满足做多条件: 周三反转做多 - 前两日下跌({df.iloc[-3]['增减']:.5f}, {prev_data['增减']:.5f}), 价格跳空={latest_data['开盘价'] > prev_data['收盘价']}, 当前上涨={latest_data['增减'] > 0}")
+                        print(f"[EURUSD] 满足做多条件: 周三反转做多 - 前两日下跌({df.iloc[-3]['增减']:.5f}, {prev_data['增减']:.5f}), 价格跳空={latest_data['开盘价'] > prev_data['收盘价']}, 当前上涨={latest_data['增减'] > 0}")
 
                     # 前两日上涨→周三反转：做空
                     elif (df.iloc[-3]['增减'] > 0 and
@@ -557,7 +557,7 @@ def run_strategy():
                           latest_data['增减'] < 0):
                         signal_type = "周三反转做空"
                         direction = "short"
-                        print(f"满足做空条件: 周三反转做空 - 前两日上涨({df.iloc[-3]['增减']:.5f}, {prev_data['增减']:.5f}), 价格跳空={latest_data['开盘价'] < prev_data['收盘价']}, 当前下跌={latest_data['增减'] < 0}")
+                        print(f"[EURUSD] 满足做空条件: 周三反转做空 - 前两日上涨({df.iloc[-3]['增减']:.5f}, {prev_data['增减']:.5f}), 价格跳空={latest_data['开盘价'] < prev_data['收盘价']}, 当前下跌={latest_data['增减'] < 0}")
                     else:
                         signal_reasons.append(f"周三反转: 前两日涨跌({df.iloc[-3]['增减']:.5f}, {prev_data['增减']:.5f}), 跳空={latest_data['开盘价'] > prev_data['收盘价']}, 当前涨跌={latest_data['增减'] > 0}")
 
@@ -565,12 +565,12 @@ def run_strategy():
                 elif latest_data['MA5'] > latest_data['MA10'] and prev_data['MA5'] <= prev_data['MA10']:
                     signal_type = "MA金叉"
                     direction = "long"
-                    print(f"满足做多条件: MA金叉 - 当前MA5={latest_data['MA5']:.5f}, MA10={latest_data['MA10']:.5f}, 前期MA5={prev_data['MA5']:.5f}, 前期MA10={prev_data['MA10']:.5f}")
+                    print(f"[EURUSD] 满足做多条件: MA金叉 - 当前MA5={latest_data['MA5']:.5f}, MA10={latest_data['MA10']:.5f}, 前期MA5={prev_data['MA5']:.5f}, 前期MA10={prev_data['MA10']:.5f}")
                 
                 elif latest_data['MA5'] < latest_data['MA10'] and prev_data['MA5'] >= prev_data['MA10']:
                     signal_type = "MA死叉"
                     direction = "short"
-                    print(f"满足做空条件: MA死叉 - 当前MA5={latest_data['MA5']:.5f}, MA10={latest_data['MA10']:.5f}, 前期MA5={prev_data['MA5']:.5f}, 前期MA10={prev_data['MA10']:.5f}")
+                    print(f"[EURUSD] 满足做空条件: MA死叉 - 当前MA5={latest_data['MA5']:.5f}, MA10={latest_data['MA10']:.5f}, 前期MA5={prev_data['MA5']:.5f}, 前期MA10={prev_data['MA10']:.5f}")
                 else:
                     signal_reasons.append(f"MA信号: 当前MA5/MA10={latest_data['MA5']:.5f}/{latest_data['MA10']:.5f}, 前期MA5/MA10={prev_data['MA5']:.5f}/{prev_data['MA10']:.5f}")
                 
@@ -580,12 +580,12 @@ def run_strategy():
                     if latest_data['增减'] > 0:
                         signal_type = "强势上涨"
                         direction = "long"
-                        print(f"满足做多条件: 强势上涨 - 增减={latest_data['增减']:.5f}, 波动幅度={latest_data['波动幅度']:.5f}")
+                        print(f"[EURUSD] 满足做多条件: 强势上涨 - 增减={latest_data['增减']:.5f}, 波动幅度={latest_data['波动幅度']:.5f}")
                     # 强势下跌做空
                     else:
                         signal_type = "强势下跌"
                         direction = "short"
-                        print(f"满足做空条件: 强势下跌 - 增减={latest_data['增减']:.5f}, 波动幅度={latest_data['波动幅度']:.5f}")
+                        print(f"[EURUSD] 满足做空条件: 强势下跌 - 增减={latest_data['增减']:.5f}, 波动幅度={latest_data['波动幅度']:.5f}")
                 else:
                     signal_reasons.append(f"强趋势信号: 增减={latest_data['增减']:.5f}, 波动幅度={latest_data['波动幅度']:.5f}")
                     
@@ -596,7 +596,7 @@ def run_strategy():
                     # 获取当前价格
                     tick = mt5.symbol_info_tick(symbol)
                     if tick is None:
-                        print("无法获取当前价格")
+                        print("[EURUSD] 无法获取当前价格")
                         time.sleep(60)  # 等待1分钟再尝试
                         continue
                         
@@ -619,22 +619,22 @@ def run_strategy():
                         order_id_counter += 1
                         current_position_ticket = ticket
                         # 简化输出信息
-                        print(f"开仓: {direction}, 满足条件: {signal_type}, 入场价: {price}, 止损: {sl}, 止盈: {tp}")
+                        print(f"[EURUSD] 开仓: {direction}, 满足条件: {signal_type}, 入场价: {price}, 止损: {sl}, 止盈: {tp}")
                 else:
                     # 没有满足条件的信号，输出详细原因
                     if signal_reasons:
-                        print("未满足入场条件:")
+                        print("[EURUSD] 未满足入场条件:")
                         for reason in signal_reasons:
                             print(f"  - {reason}")
                     else:
-                        print("未满足入场条件，当前日期不符合任何交易信号触发条件")
-                    print("继续等待")
+                        print("[EURUSD] 未满足入场条件，当前日期不符合任何交易信号触发条件")
+                    print("[EURUSD] 继续等待")
             elif current_position is not None:
-                print(f"当前持有仓位: {current_position.direction}, 入场价: {current_position.entry_price}")
+                print(f"[EURUSD] 当前持有仓位: {current_position.direction}, 入场价: {current_position.entry_price}")
             elif current_lot <= 0:
                 # 获取全局状态信息用于输出
                 global_stats = shared_state.get_global_stats()
-                print(f"风险控制限制开仓: 当前手数={current_lot}, 全局当日盈亏={global_stats['daily_pnl']:.2f}, 全局总盈亏={global_stats['total_pnl']:.2f}, 全局净值={global_stats['equity']:.2f}")
+                print(f"[EURUSD] 风险控制限制开仓: 当前手数={current_lot}, 全局当日盈亏={global_stats['daily_pnl']:.2f}, 全局总盈亏={global_stats['total_pnl']:.2f}, 全局净值={global_stats['equity']:.2f}")
 
             # -------------------- 有持仓：检查平仓条件 --------------------
             if current_position is not None:
@@ -642,7 +642,7 @@ def run_strategy():
                 positions = mt5.positions_get(symbol=symbol)
                 if positions is None or len(positions) == 0:
                     # 持仓已平仓（可能是止盈止损触发），更新状态
-                    print(f"持仓已平仓，订单号: {current_position.ticket}")
+                    print(f"[EURUSD] 持仓已平仓，订单号: {current_position.ticket}")
                     
                     # 查询最近的平仓订单以获取盈亏信息，仅查询当前币种
                     today = datetime.now().date()
@@ -664,7 +664,7 @@ def run_strategy():
                                     total_pnl += profit
                                     # 更新全局状态
                                     shared_state.update_daily_stats(trades_count=1, profit=profit)
-                                    print(f"平仓: MT5自动平仓, 盈亏: {profit:.2f}, 今日交易次数: {daily_trades}")
+                                    print(f"[EURUSD] 平仓: MT5自动平仓, 盈亏: {profit:.2f}, 今日交易次数: {daily_trades}")
                                     # 记录平仓时间
                                     last_close_time = datetime.now()
                                     break
@@ -682,7 +682,7 @@ def run_strategy():
                         # 获取当前价格
                         tick = mt5.symbol_info_tick(symbol)
                         if tick is None:
-                            print("无法获取当前价格进行时间止损")
+                            print("[EURUSD] 无法获取当前价格进行时间止损")
                             time.sleep(60)  # 等待1分钟再尝试
                             continue
                             
@@ -694,7 +694,7 @@ def run_strategy():
                             position_copy = current_position
                             position_copy.close(current_price, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                             # 简化输出信息
-                            print(f"平仓: 时间止损, 盈亏: {position_copy.pnl:.2f}, 今日交易次数: {daily_trades}")
+                            print(f"[EURUSD] 平仓: 时间止损, 盈亏: {position_copy.pnl:.2f}, 今日交易次数: {daily_trades}")
                             current_position = None
                             current_position_ticket = None
                             daily_trades += 1
