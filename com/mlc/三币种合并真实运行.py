@@ -91,9 +91,9 @@ def main():
     eurusd_thread = threading.Thread(target=run_eurusd_strategy, name="EURUSD_Thread")
     eurusd_thread.daemon = True  # 设置为守护线程
     
-    # 创建并启动XAUUSD策略线程
-    xauusd_thread = threading.Thread(target=run_xauusd_strategy, name="XAUUSD_Thread")
-    xauusd_thread.daemon = True  # 设置为守护线程
+    # # 创建并启动XAUUSD策略线程
+    # xauusd_thread = threading.Thread(target=run_xauusd_strategy, name="XAUUSD_Thread")
+    # xauusd_thread.daemon = True  # 设置为守护线程
     
     # 创建并启动全局状态监控线程
     monitor_thread = threading.Thread(target=monitor_global_state, name="Monitor_Thread")
@@ -102,7 +102,7 @@ def main():
     # 启动所有线程
     gbpusd_thread.start()
     eurusd_thread.start()
-    xauusd_thread.start()
+    # xauusd_thread.start()
     monitor_thread.start()
     
     print("所有策略已启动，正在运行中...")
