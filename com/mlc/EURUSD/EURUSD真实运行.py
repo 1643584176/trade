@@ -46,6 +46,7 @@ order_id_counter = 1  # 订单ID自增
 
 # 全局交易状态变量
 current_position_ticket = None
+last_close_time = None  # 上次平仓时间
 
 # ======================== 2. 订单类（模拟真实订单） ========================
 class TradeOrder:
@@ -407,7 +408,7 @@ def close_position(ticket):
 # ======================== 4. 核心交易逻辑 ========================
 def run_strategy():
     global order_id_counter, current_position, current_balance, equity
-    global daily_trades, daily_pnl, total_pnl, last_trading_day, current_position_ticket
+    global daily_trades, daily_pnl, total_pnl, last_trading_day, current_position_ticket, last_close_time
     
     # 初始化MT5连接
     if not mt5.initialize():
@@ -497,6 +498,16 @@ def run_strategy():
 
             # -------------------- 空仓：检查入场条件（多信号触发） --------------------
             if current_position is None and current_lot > 0:
+                # 检查上次平仓时间，如果是同一根K线内平仓的，则不立即开仓
+                if last_close_time is not None:
+                    # 获取最新H1 K线的开始时间
+                    latest_h1_time = latest_data['时间'].replace(minute=0, second=0, microsecond=0)
+                    # 如果上次平仓时间在当前K线周期内，则跳过开仓
+                    if last_close_time >= latest_h1_time:
+                        print(f"上次平仓时间 {last_close_time} 在当前K线周期内，等待下一根完整K线")
+                        time.sleep(60)
+                        continue
+                
                 signal_type = None
                 direction = None
                 signal_reasons = []  # 记录信号判断过程
@@ -658,6 +669,8 @@ def run_strategy():
                                     daily_pnl += profit
                                     total_pnl += profit
                                     print(f"平仓: MT5自动平仓, 盈亏: {profit:.2f}, 余额: {current_balance:.2f}, 今日交易次数: {daily_trades}")
+                                    # 记录平仓时间
+                                    last_close_time = datetime.now()
                                     break
                     
                     current_position = None
@@ -692,6 +705,8 @@ def run_strategy():
                             current_balance += position_copy.pnl
                             daily_pnl += position_copy.pnl
                             total_pnl += position_copy.pnl
+                            # 记录平仓时间
+                            last_close_time = datetime.now()
 
             # 更新净值（含未平仓盈亏）
             if current_position is not None:
