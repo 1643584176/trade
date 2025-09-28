@@ -89,28 +89,51 @@ def adjust_lot_size(current_row, past_week_vol):
         return min_lot  # 其他情况使用2手
 
 def calculate_sl_tp(current_row, direction):
-    """计算止损止盈（EURUSD专用参数）"""
+    """计算止损止盈（EURUSD专用参数，考虑点差和风险收益比）"""
     # 处理时间格式：Timestamp→str→提取小时（避免strptime错误）
     time_str = current_row['时间'].strftime("%Y-%m-%d %H:%M:%S")
     hour = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").hour
 
     # EURUSD在欧洲交易时段波动较大，调整止损止盈倍数
-    if 7 <= hour <= 12 or 15 <= hour <= 19:  # 欧洲交易时段
-        sl_multiplier = 0.7
-        tp_multiplier = 1.8
+    # 欧洲交易时段（7-12点和15-19点）：EURUSD波动较大，采用较高风险收益比
+    if 7 <= hour <= 12 or 15 <= hour <= 19:
+        sl_multiplier = 0.6
+        tp_multiplier = 1.8  # 风险收益比1:3
+    # 亚洲时段（0-6点和22-23点）：波动较小，采用适中风险收益比
+    elif 0 <= hour <= 6 or 22 <= hour <= 23:
+        sl_multiplier = 0.5
+        tp_multiplier = 1.5  # 风险收益比1:3
+    # 其他时段：适中风险收益比
     else:
-        sl_multiplier = 0.4
-        tp_multiplier = 1.2
+        sl_multiplier = 0.55
+        tp_multiplier = 1.65  # 风险收益比约1:3
 
-    # 按多空方向计算点位
+    # 获取EURUSD点差
+    symbol_info = mt5.symbol_info(symbol)
+    spread = symbol_info.spread if symbol_info is not None else 0
+    point = symbol_info.point if symbol_info is not None else 0.0001
+    spread_value = spread * point
+    
+    # 确保最小止损距离，EURUSD止损距离不应低于45点
+    min_sl_distance = 0.00045
+    calculated_sl_distance = sl_multiplier * current_row['波动幅度']
+    sl_distance = max(min_sl_distance, calculated_sl_distance)
+
+    # 按多空方向计算点位，考虑点差影响
     if direction == "long":
-        sl = current_row['开盘价'] - sl_multiplier * current_row['波动幅度']
-        tp = current_row['开盘价'] + tp_multiplier * current_row['波动幅度']
+        # 多单止损需额外扣除点差，止盈需额外增加点差
+        sl = current_row['开盘价'] - sl_distance - spread_value * 2.0
+        tp = current_row['开盘价'] + tp_multiplier * current_row['波动幅度'] - spread_value * 0.5
     else:
-        sl = current_row['开盘价'] + sl_multiplier * current_row['波动幅度']
-        tp = current_row['开盘价'] - tp_multiplier * current_row['波动幅度']
+        # 空单止损需额外增加点差，止盈需额外扣除点差
+        sl = current_row['开盘价'] + sl_distance + spread_value * 2.0
+        tp = current_row['开盘价'] - tp_multiplier * current_row['波动幅度'] + spread_value * 0.5
 
-    return round(sl, 5), round(tp, 5)  # 保留5位小数（外汇标准精度）
+    result_sl = round(sl, 5)
+    result_tp = round(tp, 5)
+    print(f"[EURUSD] 计算止盈止损: 方向={direction}, 入场价={current_row['开盘价']}, 止损={result_sl}, 止盈={result_tp}, 波动幅度={current_row['波动幅度']}, 点差={spread_value}, 风险收益比={sl_distance/max(spread_value, 0.00001):.1f}:{tp_multiplier*current_row['波动幅度']/max(spread_value, 0.00001):.1f}")
+    
+    return result_sl, result_tp  # 保留5位小数（外汇标准精度）
 
 def get_mt5_data(symbol="EURUSD", timeframe=mt5.TIMEFRAME_H1, count=1000):
     """
