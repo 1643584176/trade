@@ -35,7 +35,7 @@ def run_eurusd_strategy():
 def run_usdjpy_strategy():
     """运行USDJPY策略"""
     try:
-        from USDJPY.USDJPY真实运行 import run_strategy as usdjpy_run_strategy
+        from Trader.com.mlc.USDJPY.USDJPY真实运行 import run_strategy as usdjpy_run_strategy
         usdjpy_run_strategy()
     except Exception as e:
         print(f"USDJPY策略执行过程中发生错误: {str(e)}")

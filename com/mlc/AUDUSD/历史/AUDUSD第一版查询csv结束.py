@@ -105,7 +105,7 @@ def calculate_pnl(entry_price, exit_price, direction, lot_size):
 # ======================== 4. 数据预处理（确保格式正确） ========================
 # 读取数据（请替换为你的实际文件路径！！！）
 # 示例路径：C:/Users/HS/Desktop/AUDUSD_H1_历史数据.csv（桌面路径）
-df = pd.read_csv(r'D:\newProject\Trader\com\mlc\AUDUSD\AUDUSD_H1_历史数据.csv')
+df = pd.read_csv(r'/Trader/com/mlc/AUDUSD/v1/AUDUSD_H1_历史数据.csv')
 
 # 强制时间列为datetime格式（避免混合格式错误）
 df['时间点'] = pd.to_datetime(df['时间点'], format="%Y-%m-%d %H:%M:%S", errors='coerce')
