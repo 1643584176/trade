@@ -82,51 +82,32 @@ def adjust_lot_size(current_row, past_week_vol):
     return max_lot if (trend_strength > 0.6 and current_row['波动幅度'] < past_week_vol) else min_lot
 
 def calculate_sl_tp(current_row, direction):
-    """计算止损止盈（基于波动幅度动态调整，考虑点差，确保合理风险收益比）"""
+    """计算止损止盈（真实点位，按时间段调整流动性）"""
     # 处理时间格式：Timestamp→str→提取小时（避免strptime错误）
     time_str = current_row['时间'].strftime("%Y-%m-%d %H:%M:%S")
     hour = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").hour
 
-    # USDJPY在不同时段波动性不同，调整止损止盈倍数以确保合理的风险收益比
-    # 流动性低时段（凌晨0-5点）：收紧止损止盈，风险收益比为1:2
+    # 流动性低时段（凌晨0-5点）：收紧止损止盈
     if 0 <= hour <= 5:
-        sl_multiplier = 0.4
-        tp_multiplier = 0.8
-    # 亚洲交易时段（GMT 0:00-9:00）：USDJPY主要交易时段，采用较高风险收益比
-    elif 0 <= hour <= 9:
-        sl_multiplier = 0.5
-        tp_multiplier = 1.5  # 风险收益比1:3
-    # 其他时段：适中风险收益比
+        sl_multiplier = 0.3
+        tp_multiplier = 0.6
     else:
         sl_multiplier = 0.5
-        tp_multiplier = 1.2  # 风险收益比1:2.4
+        tp_multiplier = 1.5
 
-    # 获取USDJPY点差
-    symbol_info = mt5.symbol_info(symbol)
-    spread = symbol_info.spread if symbol_info is not None else 0
-    point = symbol_info.point if symbol_info is not None else 0.001
-    spread_value = spread * point
-    
-    # 确保最小止损距离，USDJPY止损距离不应低于30点
-    min_sl_distance = 0.030
-    calculated_sl_distance = sl_multiplier * current_row['波动幅度']
-    sl_distance = max(min_sl_distance, calculated_sl_distance)
-    
-    # 按多空方向计算点位，考虑点差影响
+    # 按多空方向计算点位
     if direction == "long":
-        # 多单止损需额外扣除点差，止盈需额外增加点差
-        sl = current_row['开盘价'] - sl_distance
+        sl = current_row['开盘价'] - sl_multiplier * current_row['波动幅度']
         tp = current_row['开盘价'] + tp_multiplier * current_row['波动幅度']
     else:
-        # 空单止损需额外增加点差，止盈需额外扣除点差
-        sl = current_row['开盘价'] + sl_distance
+        sl = current_row['开盘价'] + sl_multiplier * current_row['波动幅度']
         tp = current_row['开盘价'] - tp_multiplier * current_row['波动幅度']
 
     # 四舍五入到合适的小数位数（USDJPY通常为3位小数）
     sl = round(sl, 3)
     tp = round(tp, 3)
     
-    print(f"[USDJPY] 计算止盈止损: 方向={direction}, 入场价={current_row['开盘价']}, 止损={sl}, 止盈={tp}, 波动幅度={current_row['波动幅度']}, 点差={spread_value}")
+    print(f"[USDJPY] 计算止盈止损: 方向={direction}, 入场价={current_row['开盘价']}, 止损={sl}, 止盈={tp}, 波动幅度={current_row['波动幅度']}")
     
     return sl, tp
 
