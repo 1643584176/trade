@@ -12,7 +12,7 @@ from com.mlc.utils.time_utils import TimeUtils
 import sys
 import os as os_utils
 sys.path.insert(0, os_utils.path.join(os_utils.path.dirname(__file__), '..', '..'))
-from shared_state import shared_state
+from com.mlc.shared_state import shared_state
 
 # 交易参数 - 修改手数为1
 SYMBOL = os.getenv("TRADE_SYMBOL", "XAUUSD")

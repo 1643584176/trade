@@ -16,11 +16,11 @@ utils_path = os.path.abspath(utils_path)
 sys.path.insert(0, utils_path)
 
 # 导入时间处理工具
-from time_utils import TimeUtils
+from com.mlc.utils.time_utils import TimeUtils
 
 # 导入共享状态
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from shared_state import shared_state
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from com.mlc.shared_state import shared_state
 
 # ======================== 1. 初始化参数（真实交易模拟） ========================
 # 交易参数（USDJPY标准合约）
