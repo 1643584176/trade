@@ -13,7 +13,7 @@ from collections import defaultdict
 import MetaTrader5 as mt5
 
 # 添加utils目录到Python路径
-utils_path = os.path.join(os.path.dirname(__file__), '..', 'utils')
+utils_path = os.path.join(os.path.dirname(__file__), '..','..', 'utils')
 utils_path = os.path.abspath(utils_path)
 sys.path.insert(0, utils_path)
 
@@ -76,14 +76,19 @@ class TradeOrder:
         self.status = "closed"
 
         # 外汇盈亏公式：(平仓价-入场价)×手数×合约单位（做多）；(入场价-平仓价)×手数×合约单位（做空）
+        # USDJPY每0.001点波动等于1美元（根据用户反馈修正）
+        price_diff = abs(exit_price - self.entry_price)
+        # 每0.001点波动等于1美元，所以每1点波动等于1000美元
+        points_to_usd = 1000  # 1点 = 1000美元
+        
         if self.direction == "long":
-            jpy_pnl = (exit_price - self.entry_price) * self.lot_size * contract_size
+            # 做多时，价格上涨盈利，价格下跌亏损
+            pnl_usd = (exit_price - self.entry_price) * self.lot_size * points_to_usd
         else:
-            jpy_pnl = (self.entry_price - exit_price) * self.lot_size * contract_size
+            # 做空时，价格下跌盈利，价格上涨亏损
+            pnl_usd = (self.entry_price - exit_price) * self.lot_size * points_to_usd
 
-        # 将日元盈亏转换为美元盈亏
-        self.pnl = jpy_pnl / usd_jpy_rate
-
+        self.pnl = pnl_usd
         return self.pnl
 
 # ======================== 3. 工具函数 ========================
@@ -121,14 +126,14 @@ def calculate_sl_tp(current_row, direction, atr_value):
     # 根据USDJPY的特性调整止损止盈倍数
     # 美元日元通常波动较小，需要更精细的止损止盈设置
     if 0 <= hour <= 6 or 22 <= hour <= 23:  # 亚洲时段，波动较小
-        sl_multiplier = 1.2
-        tp_multiplier = 2.0
+        sl_multiplier = 1.2 * 10  # 增加10倍
+        tp_multiplier = 2.0 * 10  # 增加10倍
     elif 7 <= hour <= 10 or 15 <= hour <= 18:  # 欧美重叠时段，波动较大
-        sl_multiplier = 1.8
-        tp_multiplier = 2.7
+        sl_multiplier = 1.8 * 10  # 增加10倍
+        tp_multiplier = 2.7 * 10  # 增加10倍
     else:  # 其他时段
-        sl_multiplier = 1.5
-        tp_multiplier = 2.3
+        sl_multiplier = 1.5 * 10  # 增加10倍
+        tp_multiplier = 2.3 * 10  # 增加10倍
 
     # 使用ATR计算止损止盈
     sl_distance = sl_multiplier * atr_value

@@ -10,7 +10,7 @@ import sys
 import os
 
 # 添加utils目录到Python路径
-utils_path = os.path.join(os.path.dirname(__file__), '..', 'utils')
+utils_path = os.path.join(os.path.dirname(__file__), '..','..', 'utils')
 utils_path = os.path.abspath(utils_path)
 sys.path.insert(0, utils_path)
 
@@ -111,7 +111,7 @@ def calculate_sl_tp(current_row, direction):
 
     return round(sl, 5), round(tp, 5)  # 保留5位小数（外汇标准精度）
 
-def get_mt5_data(symbol="EURUSD", timeframe=mt5.TIMEFRAME_H1, count=1000):
+def get_mt5_data(symbol="EURUSD", timeframe=mt5.TIMEFRAME_H1, count=3000):
     """
     从MT5获取EURUSD历史数据
     """

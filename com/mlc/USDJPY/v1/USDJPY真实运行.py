@@ -61,19 +61,12 @@ class TradeOrder:
         self.exit_timestamp = exit_timestamp
         self.status = "closed"
 
-        # USDJPY每0.001点波动等于1美元（根据用户反馈修正）
-        price_diff = abs(exit_price - self.entry_price)
-        # 每0.001点波动等于1美元，所以每1点波动等于1000美元
-        points_to_usd = 1000  # 1点 = 1000美元
-        
+        # 外汇盈亏公式：(平仓价-入场价)×手数×合约单位（做多）；(入场价-平仓价)×手数×合约单位（做空）
         if self.direction == "long":
-            # 做多时，价格上涨盈利，价格下跌亏损
-            pnl_usd = (exit_price - self.entry_price) * self.lot_size * points_to_usd
+            self.pnl = (exit_price - self.entry_price) * self.lot_size * contract_size
         else:
-            # 做空时，价格下跌盈利，价格上涨亏损
-            pnl_usd = (self.entry_price - exit_price) * self.lot_size * points_to_usd
+            self.pnl = (self.entry_price - exit_price) * self.lot_size * contract_size
 
-        self.pnl = pnl_usd
         return self.pnl
 
 # ======================== 3. 工具函数 ========================
@@ -88,7 +81,7 @@ def adjust_lot_size(current_row, past_week_vol):
     # 趋势明确且波动较小时用3手，否则1手
     return max_lot if (trend_strength > 0.6 and current_row['波动幅度'] < past_week_vol) else min_lot
 
-def calculate_sl_tp(current_row, direction, price):
+def calculate_sl_tp(current_row, direction):
     """计算止损止盈（真实点位，按时间段调整流动性）"""
     # 处理时间格式：Timestamp→str→提取小时（避免strptime错误）
     time_str = current_row['时间'].strftime("%Y-%m-%d %H:%M:%S")
@@ -96,25 +89,25 @@ def calculate_sl_tp(current_row, direction, price):
 
     # 流动性低时段（凌晨0-5点）：收紧止损止盈
     if 0 <= hour <= 5:
-        sl_multiplier = 0.3 * 10  # 增加10倍
-        tp_multiplier = 0.6 * 10  # 增加10倍
+        sl_multiplier = 0.3
+        tp_multiplier = 0.6
     else:
-        sl_multiplier = 0.5 * 10  # 增加10倍
-        tp_multiplier = 1.5 * 10  # 增加10倍
+        sl_multiplier = 0.5
+        tp_multiplier = 1.5
 
     # 按多空方向计算点位
     if direction == "long":
-        sl = price - sl_multiplier * current_row['波动幅度']
-        tp = price + tp_multiplier * current_row['波动幅度']
+        sl = current_row['开盘价'] - sl_multiplier * current_row['波动幅度']
+        tp = current_row['开盘价'] + tp_multiplier * current_row['波动幅度']
     else:
-        sl = price + sl_multiplier * current_row['波动幅度']
-        tp = price - tp_multiplier * current_row['波动幅度']
+        sl = current_row['开盘价'] + sl_multiplier * current_row['波动幅度']
+        tp = current_row['开盘价'] - tp_multiplier * current_row['波动幅度']
 
     # 四舍五入到合适的小数位数（USDJPY通常为3位小数）
     sl = round(sl, 3)
     tp = round(tp, 3)
     
-    print(f"[USDJPY] 计算止盈止损: 方向={direction}, 入场价={price}, 止损={sl}, 止盈={tp}, 波动幅度={current_row['波动幅度']}")
+    print(f"[USDJPY] 计算止盈止损: 方向={direction}, 入场价={current_row['开盘价']}, 止损={sl}, 止盈={tp}, 波动幅度={current_row['波动幅度']}")
     
     return sl, tp
 
@@ -250,32 +243,11 @@ def check_position_status():
             
             # 重置持仓状态
             current_position = None
-            print("[USDJPY] 当前无持仓")
             
         # 如果有持仓但程序认为没有持仓，说明是外部开仓
         elif positions is not None and len(positions) > 0 and current_position is None:
             position = positions[0]
-            # 创建一个虚拟的持仓对象来跟踪外部开仓
-            current_position = TradeOrder(
-                order_id=0,
-                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                direction="long" if position.type == 0 else "short",
-                lot_size=position.volume,
-                entry_price=position.price_open,
-                sl=position.sl,
-                tp=position.tp,
-                ticket=position.ticket
-            )
-            print(f"[USDJPY] 检测到外部开仓，订单号: {position.ticket}, 方向: {'多' if position.type == 0 else '空'}, 手数: {position.volume}, 入场价: {position.price_open}")
-            
-        # 如果有持仓且程序也有持仓记录，打印当前持仓信息
-        elif positions is not None and len(positions) > 0 and current_position is not None:
-            position = positions[0]
-            print(f"[USDJPY] 当前持有仓位: 订单号 {position.ticket}, 方向: {'多' if position.type == 0 else '空'}, 手数: {position.volume}, 入场价: {position.price_open}, 止损: {position.sl}, 止盈: {position.tp}")
-            
-        # 如果没有持仓且程序也没有持仓记录
-        elif (positions is None or len(positions) == 0) and current_position is None:
-            print("[USDJPY] 当前无持仓")
+            print(f"[USDJPY] 检测到外部开仓，订单号: {position.ticket}, 方向: {'多' if position.type == 0 else '空'}, 手数: {position.volume}")
             
     except Exception as e:
         print(f"[USDJPY] 检查持仓状态时发生错误: {str(e)}")
@@ -601,6 +573,8 @@ def run_strategy():
                     
                 # 如果有信号，则开仓
                 if signal_type and direction:
+                    sl, tp = calculate_sl_tp(latest_data, direction)
+                    
                     # 获取当前价格
                     tick = mt5.symbol_info_tick(symbol)
                     if tick is None:
@@ -609,22 +583,6 @@ def run_strategy():
                         continue
                         
                     price = tick.ask if direction == "long" else tick.bid
-                    
-                    # 计算止损止盈（使用实际下单价格）
-                    sl, tp = calculate_sl_tp(latest_data, direction, price)
-                    
-                    # 再次验证价格是否合理 (多单止损应低于入场价，止盈应高于入场价)
-                    if direction == "long":
-                        if sl >= price or tp <= price:
-                            print(f"[USDJPY] 多单止损或止盈价格设置不合理: 入场价={price}, 止损={sl}, 止盈={tp}")
-                            time.sleep(60)  # 等待1分钟再尝试
-                            continue
-                    else:
-                        # 空单止损应高于入场价，止盈应低于入场价
-                        if sl <= price or tp >= price:
-                            print(f"[USDJPY] 空单止损或止盈价格设置不合理: 入场价={price}, 止损={sl}, 止盈={tp}")
-                            time.sleep(60)  # 等待1分钟再尝试
-                            continue
                     
                     # 发送真实订单
                     ticket = send_order(direction, current_lot, sl, tp, price)
@@ -653,16 +611,7 @@ def run_strategy():
                         print("[USDJPY] 未满足入场条件，当前日期不符合任何交易信号触发条件")
                     print("[USDJPY] 继续等待")
             elif current_position is not None:
-                # 打印当前持仓信息
-                try:
-                    positions = mt5.positions_get(symbol=symbol)
-                    if positions is not None and len(positions) > 0:
-                        position = positions[0]
-                        print(f"[USDJPY] 当前持有仓位: 订单号 {position.ticket}, 方向: {'多' if position.type == 0 else '空'}, 手数: {position.volume}, 入场价: {position.price_open}, 止损: {position.sl}, 止盈: {position.tp}")
-                    else:
-                        print("[USDJPY] 当前无持仓")
-                except Exception as e:
-                    print(f"[USDJPY] 获取持仓信息时发生错误: {str(e)}")
+                print(f"[USDJPY] 当前持有仓位: {current_position.direction}, 入场价: {current_position.entry_price}")
             elif current_lot <= 0:
                 # 获取全局状态信息用于输出
                 global_stats = shared_state.get_global_stats()

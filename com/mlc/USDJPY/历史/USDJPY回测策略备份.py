@@ -12,7 +12,7 @@ import sys
 from collections import defaultdict
 
 # 添加utils目录到Python路径
-utils_path = os.path.join(os.path.dirname(__file__), '..', 'utils')
+utils_path = os.path.join(os.path.dirname(__file__), '..','..', 'utils')
 utils_path = os.path.abspath(utils_path)
 sys.path.insert(0, utils_path)
 
