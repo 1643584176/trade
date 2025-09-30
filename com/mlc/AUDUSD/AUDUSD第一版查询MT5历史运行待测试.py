@@ -127,7 +127,7 @@ def calculate_sl_tp(current_row, direction):
     
     return sl, tp
 
-def get_mt5_data(symbol="AUDUSD", timeframe=mt5.TIMEFRAME_H1, days=365):
+def get_mt5_data(symbol="AUDUSD", timeframe=mt5.TIMEFRAME_H1, days=10000):
     """
     从MT5获取AUDUSD历史数据用于回测
     """
@@ -306,8 +306,8 @@ def run_backtest():
                 signal_type = "MA死叉"
                 direction = "short"
                 
-            # 如果有信号，则开仓
-            if signal_type and direction:
+            # 如果有信号且手数大于0，则开仓
+            if signal_type and direction and current_lot > 0:
                 sl, tp = calculate_sl_tp(current, direction)
                 current_position = TradeOrder(
                     order_id=order_id_counter,
@@ -353,21 +353,23 @@ def run_backtest():
                 print(
                     f"[{current_time_str}] 平单{current_position.order_id}：{exit_reason}，盈亏{pnl:.2f}元，余额{current_balance:.2f}元")
                 current_position = None
-                
-            # 添加时间止损机制（最大持仓24小时）
-            entry_time = datetime.strptime(current_position.timestamp, "%Y-%m-%d %H:%M:%S")
-            current_time_obj = datetime.strptime(current_time_str, "%Y-%m-%d %H:%M:%S")
-            time_diff = current_time_obj - entry_time
-            if time_diff.total_seconds() > 24 * 3600:  # 超过24小时
-                # 使用当前收盘价平仓
-                pnl = current_position.close(current_close, current_time_str)
-                daily_pnl += pnl
-                total_pnl += pnl
-                current_balance += pnl
-                daily_trades += 1
-                print(
-                    f"[{current_time_str}] 平单{current_position.order_id}：时间止损，盈亏{pnl:.2f}元，余额{current_balance:.2f}元")
-                current_position = None
+            else:
+                # 添加时间止损机制（最大持仓24小时）
+                # 确保current_position仍然存在再检查时间止损
+                if current_position is not None:
+                    entry_time = datetime.strptime(current_position.timestamp, "%Y-%m-%d %H:%M:%S")
+                    current_time_obj = datetime.strptime(current_time_str, "%Y-%m-%d %H:%M:%S")
+                    time_diff = current_time_obj - entry_time
+                    if time_diff.total_seconds() > 24 * 3600:  # 超过24小时
+                        # 使用当前收盘价平仓
+                        pnl = current_position.close(current_close, current_time_str)
+                        daily_pnl += pnl
+                        total_pnl += pnl
+                        current_balance += pnl
+                        daily_trades += 1
+                        print(
+                            f"[{current_time_str}] 平单{current_position.order_id}：时间止损，盈亏{pnl:.2f}元，余额{current_balance:.2f}元")
+                        current_position = None
 
         # 更新净值（含未平仓盈亏）
         if current_position is not None:
@@ -415,16 +417,22 @@ def run_backtest():
 
     # 遍历所有订单，按月份统计盈亏
     for order in orders:
+        # 只处理已平仓且有平仓时间的订单
         if order.exit_timestamp:
             # 从订单平仓时间中提取年月
-            timestamp = datetime.strptime(order.exit_timestamp, "%Y-%m-%d %H:%M:%S")
-            month_key = timestamp.strftime("%Y-%m")
-            
-            # 累计每月盈亏
-            if month_key in monthly_pnl_dict:
-                monthly_pnl_dict[month_key] += order.pnl
-            else:
-                monthly_pnl_dict[month_key] = order.pnl
+            try:
+                timestamp = datetime.strptime(order.exit_timestamp, "%Y-%m-%d %H:%M:%S")
+                month_key = timestamp.strftime("%Y-%m")
+                
+                # 累计每月盈亏
+                if month_key in monthly_pnl_dict:
+                    monthly_pnl_dict[month_key] += order.pnl
+                else:
+                    monthly_pnl_dict[month_key] = order.pnl
+            except (ValueError, TypeError) as e:
+                # 如果时间戳格式不正确或有其他问题，跳过该订单
+                print(f"警告：订单 {order.order_id} 的时间戳格式不正确，跳过该订单的月度统计")
+                continue
 
     # 按时间顺序排序并打印每月盈亏
     sorted_months = sorted(monthly_pnl_dict.keys())

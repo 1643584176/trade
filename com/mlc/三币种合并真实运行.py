@@ -109,6 +109,7 @@ def main():
     eurusd_thread = threading.Thread(target=run_eurusd_strategy, name="EURUSD_Thread")
     eurusd_thread.daemon = True  # 设置为守护线程
 
+
     # 创建并启动USDJPY策略线程
     usdjpy_thread = threading.Thread(target=run_usdjpy_strategy, name="USDJPY_Thread")
     usdjpy_thread.daemon = True  # 设置为守护线程

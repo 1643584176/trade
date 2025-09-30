@@ -107,6 +107,7 @@ def calculate_sl_tp(current_row, direction, price):
         sl = price - sl_multiplier * current_row['波动幅度']
         tp = price + tp_multiplier * current_row['波动幅度']
     else:
+        # 空单止损应高于开仓价，止盈应低于开仓价
         sl = price + sl_multiplier * current_row['波动幅度']
         tp = price - tp_multiplier * current_row['波动幅度']
 
@@ -612,19 +613,6 @@ def run_strategy():
                     
                     # 计算止损止盈（使用实际下单价格）
                     sl, tp = calculate_sl_tp(latest_data, direction, price)
-                    
-                    # 再次验证价格是否合理 (多单止损应低于入场价，止盈应高于入场价)
-                    if direction == "long":
-                        if sl >= price or tp <= price:
-                            print(f"[USDJPY] 多单止损或止盈价格设置不合理: 入场价={price}, 止损={sl}, 止盈={tp}")
-                            time.sleep(60)  # 等待1分钟再尝试
-                            continue
-                    else:
-                        # 空单止损应高于入场价，止盈应低于入场价
-                        if sl <= price or tp >= price:
-                            print(f"[USDJPY] 空单止损或止盈价格设置不合理: 入场价={price}, 止损={sl}, 止盈={tp}")
-                            time.sleep(60)  # 等待1分钟再尝试
-                            continue
                     
                     # 发送真实订单
                     ticket = send_order(direction, current_lot, sl, tp, price)
