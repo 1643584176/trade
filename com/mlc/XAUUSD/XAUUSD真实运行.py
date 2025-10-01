@@ -8,6 +8,12 @@ import os
 # 导入时间工具类
 from com.mlc.utils.time_utils import TimeUtils
 
+# 导入配置加载器
+from com.mlc.utils.config_loader import config, get_config_value, get_test_account
+
+# 导入MT5连接器
+from com.mlc.utils.mt5_connector import connect_to_mt5, check_symbol_available
+
 # 导入共享状态
 import sys
 import os as os_utils
@@ -15,9 +21,11 @@ sys.path.insert(0, os_utils.path.join(os_utils.path.dirname(__file__), '..', '..
 from com.mlc.shared_state import shared_state
 
 # 交易参数 - 修改手数为1
-SYMBOL = os.getenv("TRADE_SYMBOL", "XAUUSD")
-LOT_SIZE = float(os.getenv("LOT_SIZE", 1.0))  # 手数从0.1改为1
+SYMBOL = get_config_value('TRADE_SYMBOL', 'XAUUSD')
+LOT_SIZE = 1.0  # 保持原来的固定值
 
+# 账户参数 - 指定要使用的账户为测试账户
+ACCOUNT_NUMBER = get_config_value('TEST_ACCOUNT_NUMBER', '')  # 使用测试账户号码
 
 # 风控参数
 MAX_CONSECUTIVE_LOSSES = 2
@@ -173,33 +181,29 @@ class FTMORealTimeTrader:
         连接MT5平台
         初始化MT5连接，检查连接状态和交易品种
         """
-        if not mt5.initialize():
-            error_msg = "MT5初始化失败"
-            print(f"[{self.get_current_time()}] {error_msg}")
-            raise Exception("MT5初始化失败")
+        # 使用公共MT5连接方法连接到测试账户
+        if not connect_to_mt5("demo"):
+            raise Exception("MT5连接失败")
+            
+        # 检查交易权限
+        account_info = mt5.account_info()
+        if account_info is not None:
+            self.log_and_print(f"账户信息 - 余额: {account_info.balance}, 净值: {account_info.equity}")
+            if not account_info.trade_allowed:
+                self.log_and_print("警告：账户交易权限被禁用")
+                # 检查是否为演示账户（如果属性存在）
+                if hasattr(account_info, 'is_demo') and not account_info.is_demo:
+                    self.log_and_print("警告：当前连接的不是演示账户")
+        else:
+            self.log_and_print("无法获取账户信息")
 
-        # 检查连接状态
-        terminal_info = mt5.terminal_info()
-        if terminal_info is None or not terminal_info.connected:
-            error_msg = "MT5连接失败或未连接"
-            print(f"[{self.get_current_time()}] {error_msg}")
-            raise Exception("MT5连接失败或未连接")
-
-        # 检查交易品种
-        symbol_info = mt5.symbol_info(SYMBOL)
-        if symbol_info is None:
-            error_msg = f"交易品种 {SYMBOL} 不存在"
-            print(f"[{self.get_current_time()}] {error_msg}")
-            raise Exception(f"交易品种 {SYMBOL} 不存在")
-
-        if not symbol_info.visible:
-            if not mt5.symbol_select(SYMBOL, True):
-                error_msg = f"无法选择交易品种 {SYMBOL}"
-                print(f"[{self.get_current_time()}] {error_msg}")
-                raise Exception(f"无法选择交易品种 {SYMBOL}")
+        # 检查交易品种是否可用
+        if not check_symbol_available(SYMBOL):
+            raise Exception(f"交易品种 {SYMBOL} 不可用")
 
         print(f"[{self.get_current_time()}] MT5连接成功！")
         print(f"[{self.get_current_time()}] 交易品种{SYMBOL}已就绪")
+        print(f"[{self.get_current_time()}] 当前连接账户: {ACCOUNT_NUMBER}@{get_config_value('TEST_ACCOUNT_SERVER', '')}")
 
     def load_initial_data(self):
         """
@@ -749,6 +753,11 @@ class FTMORealTimeTrader:
         Returns:
             bool: 订单发送是否成功
         """
+        # 检查手数是否大于0
+        if volume <= 0:
+            self.log_and_print("错误：交易手数必须大于0")
+            return False
+            
         # 检查MT5连接状态
         terminal_info = mt5.terminal_info()
         if terminal_info is None or not terminal_info.connected:
@@ -758,6 +767,20 @@ class FTMORealTimeTrader:
         # 订单类型：买入=0，卖出=1
         order_type = mt5.ORDER_TYPE_BUY if action == 1 else mt5.ORDER_TYPE_SELL
         order_type_str = "买入" if action == 1 else "卖出"
+        
+        # 验证止损止盈价格逻辑
+        if action == 1 and sl != 0 and sl >= price:  # 买入时止损应低于入场价
+            self.log_and_print(f"错误：买入订单止损价格({sl})必须低于入场价({price})")
+            return False
+        if action == 1 and tp != 0 and tp <= price:  # 买入时止盈应高于入场价
+            self.log_and_print(f"错误：买入订单止盈价格({tp})必须高于入场价({price})")
+            return False
+        if action == -1 and sl != 0 and sl <= price:  # 卖出时止损应高于入场价
+            self.log_and_print(f"错误：卖出订单止损价格({sl})必须高于入场价({price})")
+            return False
+        if action == -1 and tp != 0 and tp >= price:  # 卖出时止盈应低于入场价
+            self.log_and_print(f"错误：卖出订单止盈价格({tp})必须低于入场价({price})")
+            return False
         
         # 价格精度调整（黄金通常为2位小数）
         def round_price(price):
@@ -789,7 +812,35 @@ class FTMORealTimeTrader:
             self.log_and_print(error_msg)
             return False
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            error_msg = f"订单发送失败！错误代码：{result.retcode}, 描述：{mt5.last_error()}"
+            error_msg = f"订单发送失败！错误代码：{result.retcode}"
+            # 添加更详细的错误描述
+            if result.retcode == 10044:
+                error_msg += " (交易被禁用，请检查账户设置和交易权限)"
+                # 检查账户交易权限
+                account_info = mt5.account_info()
+                if account_info is not None:
+                    # 检查账户是否允许交易
+                    self.log_and_print(f"账户状态检查 - 交易允许: {account_info.trade_allowed}")
+                    if not account_info.trade_allowed:
+                        self.log_and_print("请检查MT5客户端账户设置，确保允许交易")
+                        # 检查是否为演示账户（如果属性存在）
+                        if hasattr(account_info, 'is_demo'):
+                            if account_info.is_demo == 0:  # 不是演示账户
+                                self.log_and_print("警告：您似乎在使用实盘账户进行测试，请切换到演示账户")
+                        else:
+                            # 尝试通过账户号码判断是否为演示账户
+                            account_number = get_config_value('TEST_ACCOUNT_NUMBER', '')
+                            if account_number and 'demo' not in account_number.lower():
+                                self.log_and_print("警告：您似乎在使用实盘账户进行测试，请切换到演示账户")
+            elif result.retcode == 10013:
+                error_msg += " (交易参数不正确，请检查价格、手数等参数)"
+            elif result.retcode == 10014:
+                error_msg += " (交易服务器错误)"
+            elif result.retcode == 10019:
+                error_msg += " (价格已变动，请重新发送订单)"
+            elif result.retcode == 10025:
+                error_msg += " (市场已关闭)"
+            error_msg += f", 描述：{mt5.last_error()}"
             self.log_and_print(error_msg)
             return False
 
@@ -836,14 +887,28 @@ class FTMORealTimeTrader:
             return round(price, 2)
 
         if signal == 1:  # 买入
-            # 修正点差影响计算：止损需额外扣除点差，止盈需额外增加点差
+            # 止损必须低于入场价，止盈必须高于入场价
             sl = round_price(price - (atr * sl_multiplier + spread_value * 1.5))
             tp = round_price(price + (atr * tp_multiplier - spread_value * 1.5))
+            # 验证价格逻辑
+            if sl >= price:
+                self.log_and_print(f"警告：买入订单止损价格({sl})应低于入场价({price})，正在调整...")
+                sl = round_price(price - (atr * sl_multiplier + spread_value * 1.5))
+            if tp <= price:
+                self.log_and_print(f"警告：买入订单止盈价格({tp})应高于入场价({price})，正在调整...")
+                tp = round_price(price + (atr * tp_multiplier - spread_value * 1.5))
             success = self.send_order(1, LOT_SIZE, price, sl, tp)
         else:  # 卖出
-            # 修正点差影响计算：止损需额外增加点差，止盈需额外扣除点差
+            # 止损必须高于入场价，止盈必须低于入场价
             sl = round_price(price + (atr * sl_multiplier + spread_value * 1.5))
             tp = round_price(price - (atr * tp_multiplier - spread_value * 1.5))
+            # 验证价格逻辑
+            if sl <= price:
+                self.log_and_print(f"警告：卖出订单止损价格({sl})应高于入场价({price})，正在调整...")
+                sl = round_price(price + (atr * sl_multiplier + spread_value * 1.5))
+            if tp >= price:
+                self.log_and_print(f"警告：卖出订单止盈价格({tp})应低于入场价({price})，正在调整...")
+                tp = round_price(price - (atr * tp_multiplier - spread_value * 1.5))
             success = self.send_order(-1, LOT_SIZE, price, sl, tp)
 
         if success:

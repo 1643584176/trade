@@ -1,6 +1,6 @@
 """
-USDJPY交易策略 - MT5版本
-基于MT5实时数据的USDJPY交易策略实现
+USDJPY交易策略 - MT5版本 (5倍止损止盈版)
+基于MT5实时数据的USDJPY交易策略实现，止盈止损点位扩大5倍
 """
 
 import pandas as pd
@@ -16,18 +16,29 @@ utils_path = os.path.abspath(utils_path)
 sys.path.insert(0, utils_path)
 
 # 导入时间处理工具
-from com.mlc.utils.time_utils import TimeUtils
+from time_utils import TimeUtils
+
+# 导入配置加载器
+from config_loader import config, get_config_value
 
 # 导入共享状态
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from com.mlc.shared_state import shared_state
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from shared_state import shared_state
 
 # ======================== 1. 初始化参数（真实交易模拟） ========================
 # 交易参数（USDJPY标准合约）
-contract_size = 100000  # 1标准手=10万日元
+contract_size = 100000  # 1标准手=10万美元
 min_lot = 1.0  # 最小仓位
 max_lot = 3.0  # 最大仓位
-symbol = "USDJPY"  # 交易品种
+symbol = get_config_value('USDJPY_SYMBOL', 'USDJPY')  # 交易品种
+
+# 仓位大小（保持原来的固定值）
+lot_size = 1.0  # 原来的固定手数
+
+# 账户参数 - 使用测试账户
+account_number = get_config_value('TEST_ACCOUNT_NUMBER', '')
+account_password = get_config_value('TEST_ACCOUNT_PASSWORD', '')
+account_server = get_config_value('TEST_ACCOUNT_SERVER', '')
 
 # 订单记录
 orders = []  # 所有订单历史
@@ -38,6 +49,9 @@ total_pnl = 0.0  # 总盈亏
 last_trading_day = None  # 上一交易日
 order_id_counter = 1  # 订单ID自增
 last_close_time = None  # 上次平仓时间
+
+# 全局交易状态变量
+current_position_ticket = None
 
 # ======================== 2. 订单类（模拟真实订单） ========================
 class TradeOrder:
@@ -61,19 +75,12 @@ class TradeOrder:
         self.exit_timestamp = exit_timestamp
         self.status = "closed"
 
-        # USDJPY每0.001点波动等于1美元（根据用户反馈修正）
-        price_diff = abs(exit_price - self.entry_price)
-        # 每0.001点波动等于1美元，所以每1点波动等于1000美元
-        points_to_usd = 1000  # 1点 = 1000美元
-        
+        # 外汇盈亏公式：(平仓价-入场价)×手数×合约单位（做多）；(入场价-平仓价)×手数×合约单位（做空）
         if self.direction == "long":
-            # 做多时，价格上涨盈利，价格下跌亏损
-            pnl_usd = (exit_price - self.entry_price) * self.lot_size * points_to_usd
+            self.pnl = (exit_price - self.entry_price) * self.lot_size * contract_size
         else:
-            # 做空时，价格下跌盈利，价格上涨亏损
-            pnl_usd = (self.entry_price - exit_price) * self.lot_size * points_to_usd
+            self.pnl = (self.entry_price - exit_price) * self.lot_size * contract_size
 
-        self.pnl = pnl_usd
         return self.pnl
 
 # ======================== 3. 工具函数 ========================
@@ -125,9 +132,24 @@ def get_mt5_data(symbol="USDJPY", timeframe=mt5.TIMEFRAME_H1, count=1000):
     """
     try:
         # 初始化MT5连接
-        if not mt5.initialize():
-            print("MT5初始化失败")
-            return None
+        # 获取测试账户信息
+        from config_loader import get_test_account
+        test_account_info = get_test_account()
+        
+        # 使用测试账户连接MT5
+        if test_account_info['enabled']:
+            if not mt5.initialize(
+                login=int(test_account_info['number']), 
+                password=test_account_info['password'], 
+                server=test_account_info['server']
+            ):
+                print(f"MT5初始化失败，账户: {test_account_info['number']}")
+                return None
+        else:
+            # 如果测试账户未启用，则使用默认初始化
+            if not mt5.initialize():
+                print("MT5初始化失败")
+                return None
 
         # 获取历史数据
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)

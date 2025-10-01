@@ -18,6 +18,9 @@ sys.path.insert(0, utils_path)
 # 导入时间处理工具
 from time_utils import TimeUtils
 
+# 导入配置加载器
+from config_loader import config, get_config_value
+
 # 导入共享状态
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from shared_state import shared_state
@@ -27,7 +30,15 @@ from shared_state import shared_state
 contract_size = 100000  # 1标准手=10万英镑
 min_lot = 1.0  # 最小仓位
 max_lot = 3.0  # 最大仓位
-symbol = "GBPUSD"  # 交易品种
+symbol = get_config_value('GBPUSD_SYMBOL', 'GBPUSD')  # 交易品种
+
+# 仓位大小（保持原来的固定值）
+lot_size = 1.0  # 原来的固定手数
+
+# 账户参数 - 使用测试账户
+account_number = get_config_value('TEST_ACCOUNT_NUMBER', '')
+account_password = get_config_value('TEST_ACCOUNT_PASSWORD', '')
+account_server = get_config_value('TEST_ACCOUNT_SERVER', '')
 
 # 订单记录
 orders = []  # 所有订单历史
@@ -185,9 +196,24 @@ def get_mt5_data(symbol="GBPUSD", timeframe=mt5.TIMEFRAME_H1, count=1000):
     """
     try:
         # 初始化MT5连接
-        if not mt5.initialize():
-            print("MT5初始化失败")
-            return None
+        # 获取测试账户信息
+        from config_loader import get_test_account
+        test_account_info = get_test_account()
+        
+        # 使用测试账户连接MT5
+        if test_account_info['enabled']:
+            if not mt5.initialize(
+                login=int(test_account_info['number']), 
+                password=test_account_info['password'], 
+                server=test_account_info['server']
+            ):
+                print(f"MT5初始化失败，账户: {test_account_info['number']}")
+                return None
+        else:
+            # 如果测试账户未启用，则使用默认初始化
+            if not mt5.initialize():
+                print("MT5初始化失败")
+                return None
 
         # 获取历史数据
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)

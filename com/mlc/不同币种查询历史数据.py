@@ -3,6 +3,9 @@ import pandas as pd
 from datetime import datetime
 import pytz
 
+# 导入配置加载器
+from com.mlc.utils.config_loader import config
+
 # 根据数据生个交易策略,需要复合ftmo规则,每天至少交易三次,起手为3手,需要分析历史数据来做策略,注意昨日和今日的对比,注意星期的对比,注意周五的特殊性,注意周一周二关联性,注意周三的反转,注意周四周五的连续,注意大趋势,注意开盘价和当前价格的关系,注意你在当前日期时间点看不到后面的数据,,注意可以可以根据最高价最低价预测进场点位,注意止盈止损
 
 #根据数据生个交易策略,需要复合ftmo规则,每天至少交易三次,起手为3手,需要分析历史数据来做策略,注意昨日和今日的对比,注意星期的对比,注意周五的特殊性,注意周一周二关联性,注意周三的反转,注意周四周五的连续,注意大趋势,注意开盘价和当前价格的关系,注意你在当前日期时间点看不到后面的数据,,注意可以可以根据最高价最低价预测进场点位,注意止盈止损,不要根据平均值来计算涨跌,这种概率都是50%,你参考其他的比如开盘价和当前价位关系,或者其他的都可以,买涨跌都可以,不是非要一个方向
@@ -37,7 +40,9 @@ def parse_user_input(user_input):
         return symbol, timeframe, timeframe_str
     except Exception as e:
         print(f"解析输入时出错: {e}")
-        return "XAUUSD", mt5.TIMEFRAME_M30, "M30"
+        # 使用配置中的默认交易品种
+        default_symbol = config.get('TRADE_SYMBOL', 'XAUUSD')
+        return default_symbol, mt5.TIMEFRAME_M30, "M30"
 
 
 def get_historical_data(symbol, timeframe, timeframe_str):
@@ -137,7 +142,9 @@ def main():
     user_input = input("请输入查询参数 (格式: 品种-周期，例如: XAUUSD-M30): ")
 
     if not user_input:
-        user_input = "XAUUSD-M30"  # 默认值
+        # 使用配置中的默认交易品种
+        default_symbol = config.get('TRADE_SYMBOL', 'XAUUSD')
+        user_input = f"{default_symbol}-M30"  # 默认值
 
     # 解析用户输入
     symbol, timeframe, timeframe_str = parse_user_input(user_input)

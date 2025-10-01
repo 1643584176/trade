@@ -13,6 +13,9 @@ import os
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
+# 导入配置加载器
+from com.mlc.utils.config_loader import config
+
 # 导入共享状态
 from shared_state import shared_state
 

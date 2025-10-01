@@ -7,6 +7,9 @@ import os
 # 添加项目路径到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+# 导入配置加载器
+from com.mlc.utils.config_loader import config
+
 # 导入时间处理工具
 try:
     from utils.time_utils import TimeUtils
