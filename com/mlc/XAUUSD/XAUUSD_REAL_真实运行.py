@@ -650,9 +650,9 @@ class FTMORealTimeTrader:
         weekday_num = latest_data["星期数"]
         # 确保hour是整数类型，避免浮点数导致时段判断错误
         hour = int(latest_data["小时"]) if not isinstance(latest_data["小时"], int) else latest_data["小时"]
-        # 获取当前时间来判断交易时段，而不是使用K线时间
-        current_hour = datetime.now().hour
-        session_type = self.get_session_type(current_hour)
+        # K线时间
+        session_type = self.get_session_type(hour)
+
         open_direction = 1 if latest_data["相对开盘价变化"] > 0 else -1
         momentum_1 = 1 if latest_data["1周期动量"] > 0 else -1
         momentum_3 = 1 if latest_data["3周期动量"] > 0 else -1
@@ -667,10 +667,8 @@ class FTMORealTimeTrader:
         # 确保weekday_num是整数类型，避免numpy.float64类型导致索引错误
         weekday_num_int = int(weekday_num) if not isinstance(weekday_num, int) else weekday_num
         weekday_name = weekday_names[weekday_num_int] if 0 <= weekday_num_int <= 6 else f"星期{weekday_num_int}"
-        # 使用当前时间来显示时段信息
-        current_time = datetime.now()
-        current_hour = current_time.hour
-        self.log_and_print(f"信号分析 - K线时间: {formatted_time}, 时段: {session_type}, 星期: {weekday_name}({weekday_num_int}), 小时: {current_hour}")
+        # 使用K线数据中的小时数而不是当前系统时间
+        self.log_and_print(f"信号分析 - K线时间: {formatted_time}, 时段: {session_type}, 星期: {weekday_name}({weekday_num_int}), 小时: {hour}")
         self.log_and_print(f"开仓方向: {open_direction}, 1周期动量: {momentum_1}, 3周期动量: {momentum_3}, ATR: {atr:.4f}")
         # 增加持仓信息透明度
         self.log_current_position_info()
