@@ -19,7 +19,7 @@ from com.mlc.shared_state import shared_state
 
 # 交易参数 - 修改手数为1
 SYMBOL = get_config_value('TRADE_SYMBOL', 'XAUUSD')
-LOT_SIZE = 1.0  # 保持原来的固定值
+LOT_SIZE = 1.0  # 默认手数为1，固定手数
 
 # 账户参数 - 指定要使用的账户为实盘账户
 
@@ -36,7 +36,7 @@ MAX_DAILY_TRADES = 3
 TIME_STOP_LOSS = 10  # H1周期下的10小时
 ATR_PERIOD = 14
 RSI_PERIOD = 14
-MAX_SINGLE_LOSS = 600  # 单笔最大止损金额
+MAX_SINGLE_LOSS_BASE = 600  # 单笔最大止损金额基础值，固定为600美元
 
 # 全局状态变量
 current_position = 0  # 0=无仓, 1=多仓, -1=空仓
@@ -51,6 +51,7 @@ historical_data = pd.DataFrame()
 trade_sequence = 0  # 交易序列计数器
 last_trade_signal = 0  # 上一次交易信号
 last_close_reason = ""  # 上一次平仓原因
+last_close_time = None  # 上一次平仓时间
 
 # 全局交易状态变量
 current_position_ticket = None
@@ -721,8 +722,9 @@ class FTMORealTimeTrader:
         if trade_sequence >= 1 and signal != 0:
             if last_close_reason == "止盈":
                 # 止盈后反向交易
-                signal = -last_trade_signal
-                reasons.append(f"止盈后反向交易({signal})")
+                # signal = -last_trade_signal
+                # reasons.append(f"止盈后反向交易({signal})")
+                pass
             else:
                 # 止损后顺着原方向交易或默认信号
                 signal = last_trade_signal
@@ -735,8 +737,9 @@ class FTMORealTimeTrader:
             if close_reason is not None:
                 if close_reason == "止盈":
                     # 如果最近一笔交易是止盈，则反向
-                    signal = -signal if signal != 0 else signal
-                    reasons.append(f"基于历史交易止盈反向({signal})")
+                    # signal = -signal if signal != 0 else signal
+                    # reasons.append(f"基于历史交易止盈反向({signal})")
+                    pass
                 # 如果是止损则保持原方向，这里不需要额外处理，因为默认就是原方向
 
         if len(reasons) < 1:
@@ -863,6 +866,12 @@ class FTMORealTimeTrader:
         # 确定开仓价格
         price = tick.ask if signal == 1 else tick.bid
 
+        # 固定手数为1手
+        trade_lot_size = 1.0
+        
+        # 计算最大单笔亏损限额，固定为600美元
+        max_single_loss = 600.0
+
         # 计算止损止盈 - 增加倍数以获得更大盈亏比
         atr = latest_data["ATR"] if not np.isnan(latest_data["ATR"]) else 0.001
         sl_multiplier = 0.8  # 从0.8增加到1.2
@@ -901,12 +910,12 @@ class FTMORealTimeTrader:
 
         # 检查止损金额是否超过最大限制，如果超过则调整止损位置
         price_diff = abs(price - sl)  # 止损价格与入场价的差值
-        potential_loss = price_diff * self.contract_size * LOT_SIZE  # 潜在亏损金额
+        potential_loss = price_diff * self.contract_size * trade_lot_size  # 潜在亏损金额
         
-        if potential_loss > MAX_SINGLE_LOSS:
-            self.log_and_print(f"警告：单笔潜在亏损 {potential_loss:.2f} 超过最大限制 {MAX_SINGLE_LOSS}，正在调整止损位置...")
+        if potential_loss > max_single_loss:
+            self.log_and_print(f"警告：单笔潜在亏损 {potential_loss:.2f} 超过最大限制 {max_single_loss}，正在调整止损位置...")
             # 根据最大亏损限制重新计算止损位置
-            max_price_diff = MAX_SINGLE_LOSS / (self.contract_size * LOT_SIZE)
+            max_price_diff = max_single_loss / (self.contract_size * trade_lot_size)
             
             if signal == 1:  # 买入订单，止损在入场价下方
                 sl = round_price(price - max_price_diff)
@@ -915,7 +924,7 @@ class FTMORealTimeTrader:
             
             self.log_and_print(f"止损位置已调整：原止损 {price_diff:.5f} 调整为 {max_price_diff:.5f}，新止损价格: {sl}")
 
-        success = self.send_order(signal, LOT_SIZE, price, sl, tp)
+        success = self.send_order(signal, trade_lot_size, price, sl, tp)
 
         if success:
             current_position = signal
@@ -925,7 +934,7 @@ class FTMORealTimeTrader:
             trade_sequence += 1  # 更新交易序列
             last_trade_signal = signal  # 记录当前交易信号
             # 使用send_order返回的订单号
-            self.log_and_print(f"开仓成功 - 方向: {signal}, 价格: {price}, 手数: {LOT_SIZE}, "
+            self.log_and_print(f"开仓成功 - 方向: {signal}, 价格: {price}, 手数: {trade_lot_size}, "
                                f"当前交易次数: {daily_trades}, 订单编号: {self.current_position_ticket}, 交易序列: {trade_sequence}")
             # 增加持仓信息透明度
             self.log_current_position_info()
@@ -1022,6 +1031,9 @@ class FTMORealTimeTrader:
         entry_price = 0.0
         entry_time = None
         self.current_position_ticket = None
+        # 记录平仓时间
+        global last_close_time
+        last_close_time = datetime.now()
         
         # 增加持仓信息透明度
         self.log_and_print("平仓完成，当前无持仓")
@@ -1069,8 +1081,13 @@ class FTMORealTimeTrader:
                 
                 # 确定后续交易方向
                 next_signal = current_position  # 止损后顺着原方向交易
-                if close_reason == "止盈":  # 止盈后反向交易
-                    next_signal = -current_position
+                if close_reason == "止盈":  # 止盈后反向交易（根据用户要求移除此逻辑）
+                    # next_signal = -current_position
+                    pass
+                
+                # 记录平仓时间
+                global last_close_time
+                last_close_time = datetime.now()
                 
                 # 更新内部状态
                 current_position = 0
@@ -1183,6 +1200,16 @@ class FTMORealTimeTrader:
 
                 # 开仓逻辑
                 if current_position == 0 and daily_trades < MAX_DAILY_TRADES and has_latest_data:
+                    # 检查是否距离上次平仓时间过近
+                    global last_close_time
+                    if last_close_time is not None:
+                        time_since_last_close = (datetime.now() - last_close_time).total_seconds()
+                        # 如果距离上次平仓不到20分钟，则跳过交易
+                        if time_since_last_close < 1200:  # 1200秒 = 20分钟
+                            self.log_and_print(f"距离上次平仓时间过近 ({time_since_last_close/60:.1f} 分钟)，跳过交易")
+                            time.sleep(60)
+                            continue
+                    
                     signal, reasons = self.generate_real_time_signal(latest_data)
                     if signal != 0:
                         self.log_and_print(f"生成信号：{signal}，理由：{'; '.join(reasons)}")
@@ -1216,7 +1243,7 @@ class FTMORealTimeTrader:
         从历史交易记录初始化交易状态
         通过检查最近的交易记录来恢复策略状态
         """
-        global trade_sequence, last_trade_signal, last_close_reason, current_position
+        global trade_sequence, last_trade_signal, last_close_reason, current_position, last_close_time
         try:
             # 获取最近30分钟的历史交易数据
             to_time = datetime.now()
@@ -1262,6 +1289,11 @@ class FTMORealTimeTrader:
             else:
                 last_close_reason = "平仓"
                 self.log_and_print(f"从历史交易初始化状态 - 上次平仓原因: {last_close_reason} (盈亏平衡: {last_deal.profit:.2f})")
+            
+            # 设置上次平仓时间
+            if hasattr(last_deal, 'time'):
+                last_close_time = datetime.fromtimestamp(last_deal.time)
+                self.log_and_print(f"从历史交易初始化状态 - 上次平仓时间: {last_close_time}")
             
         except Exception as e:
             self.log_and_print(f"从历史交易初始化状态时出错: {str(e)}")
