@@ -60,8 +60,8 @@ def get_historical_data(symbol, timeframe, timeframe_str):
             return None
 
         # 设置时间范围 - 从2024年1月1日到当前时间
-        from_date = datetime(2024, 1, 1)
-        to_date = datetime.now()
+        from_date = datetime(2024, 10, 1)
+        to_date = datetime(2029, 10, 1)
 
         # 获取历史数据
         rates = mt5.copy_rates_range(symbol, timeframe, from_date, to_date)
