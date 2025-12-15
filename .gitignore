@@ -137,3 +137,4 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 /com/mlc/account_config.txt
+/com/mlc/test/trained_model.pkl
