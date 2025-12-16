@@ -138,3 +138,4 @@ dmypy.json
 cython_debug/
 /com/mlc/account_config.txt
 /com/mlc/test/trained_model.pkl
+/com/mlc/gbpusd/gbpusd_trained_model.pkl
