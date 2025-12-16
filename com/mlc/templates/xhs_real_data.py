@@ -89,7 +89,7 @@ class XiaohongshuRealDataGenerator:
         except Exception as e:
             logger.error(f"获取交易历史异常: {str(e)}")
             return []
-    
+
     def calculate_daily_stats(self, date=None):
         """
         计算指定日期的交易统计数据
@@ -120,15 +120,25 @@ class XiaohongshuRealDataGenerator:
             
             # 计算统计数据
             total_profit = sum(trade['profit'] for trade in daily_trades)
-            buy_trades = [t for t in daily_trades if t['type'] in [0, 6]]  # BUY, BUY_BY
-            sell_trades = [t for t in daily_trades if t['type'] in [1, 7]]  # SELL, SELL_BY
+            buy_trades = [t for t in daily_trades if t['type'] == 0 or t['type'] == 6]  # BUY, BUY_BY
+            sell_trades = [t for t in daily_trades if t['type'] == 1 or t['type'] == 7]  # SELL, SELL_BY
             
             buy_profit = sum(t['profit'] for t in buy_trades)
             sell_profit = sum(t['profit'] for t in sell_trades)
             
-            # 计算胜率
-            profitable_trades = [t for t in daily_trades if t['profit'] > 0]
-            win_rate = (len(profitable_trades) / len(daily_trades)) * 100 if daily_trades else 0
+            # 计算胜率 - 只统计实际开仓交易（类型0=BUY, 1=SELL）
+            # 类型6=BUY_BY（买入平仓）和7=SELL_BY（卖出平仓）是平仓操作，不计入胜率计算
+            open_trades = [t for t in daily_trades if t['type'] in [0, 1]]  # 只统计开仓交易
+            profitable_trades = [t for t in open_trades if t['profit'] > 0]
+            win_rate = (len(profitable_trades) / len(open_trades)) * 100 if open_trades else 0
+            
+            # 输出详细调试信息，帮助理解计算过程
+            logger.info(f"日期: {date}")
+            logger.info(f"总交易数: {len(daily_trades)}")
+            logger.info(f"开仓交易数: {len(open_trades)}")
+            logger.info(f"盈利交易数: {len(profitable_trades)}")
+            logger.info(f"总盈亏: {total_profit}")
+            logger.info(f"胜率: {win_rate:.2f}%")
             
             stats = {
                 'date': date,
@@ -178,7 +188,8 @@ class XiaohongshuRealDataGenerator:
             if self.account_info:
                 final_balance = self.account_info.balance
                 
-            total_return = (stats['total_profit'] / initial_balance) * 100 if initial_balance != 0 else 0
+            # 正确计算总收益率：(结束资金 - 初始资金) / 初始资金 * 100%
+            total_return = ((final_balance - initial_balance) / initial_balance) * 100 if initial_balance != 0 else 0
             win_rate = stats['win_rate']
             total_trades = stats['total_trades']
             
