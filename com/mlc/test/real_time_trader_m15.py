@@ -590,9 +590,48 @@ class RealTimeTraderM15:
                 raise Exception("MT5初始化失败")
             self.mt5 = mt5
             logger.info("MT5连接成功")
+            
+            # 初始化时检查现有持仓
+            self._check_existing_positions("XAUUSD")
         except Exception as e:
             logger.error(f"MT5连接异常: {str(e)}")
             self.mt5 = None
+
+    def _check_existing_positions(self, symbol):
+        """
+        检查MT5中现有的持仓
+        
+        参数:
+            symbol (str): 交易品种
+        """
+        try:
+            if self.mt5 is None:
+                logger.error("MT5未初始化")
+                return
+                
+            # 获取当前持仓
+            positions = self.mt5.positions_get(symbol=symbol)
+            if positions is None:
+                logger.warning("无法获取持仓信息")
+                return
+                
+            if len(positions) > 0:
+                # 取第一个持仓作为当前持仓
+                position = positions[0]
+                self.current_position = {
+                    'ticket': position.ticket,
+                    'entry_time': datetime.fromtimestamp(position.time),
+                    'entry_price': position.price_open,
+                    'direction': 1 if position.type == self.mt5.ORDER_TYPE_BUY else -1,
+                    'lots': position.volume
+                }
+                direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
+                logger.info(f"检测到现有持仓: {direction_str}, 入场价格: {self.current_position['entry_price']:.5f}, 手数: {self.current_position['lots']}")
+            else:
+                logger.info("未检测到现有持仓")
+                
+        except Exception as e:
+            logger.error(f"检查现有持仓异常: {str(e)}")
 
     def get_latest_data(self, symbol, timeframe, count=50):
         """
@@ -928,6 +967,11 @@ class RealTimeTraderM15:
             logger.info("策略: 当预测方向出现反向则平仓否则继续持仓")
             self.is_running = True
             first_run = True
+            
+            # 如果已经有持仓，显示持仓信息
+            if self.current_position is not None:
+                direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
+                logger.info(f"启动时检测到持仓: {direction_str}, 入场价格: {self.current_position['entry_price']:.5f}")
             
             while self.is_running:
                 try:

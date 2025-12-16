@@ -20,6 +20,7 @@ class XiaohongshuRealDataGenerator:
         初始化内容生成器
         """
         self.trade_history = None
+        self.account_info = None
     
     def connect_to_mt5(self):
         """
@@ -32,6 +33,12 @@ class XiaohongshuRealDataGenerator:
             # 初始化MT5连接
             if not mt5.initialize():
                 logger.error(f"MT5初始化失败: {mt5.last_error()}")
+                return False
+                
+            # 获取账户信息
+            self.account_info = mt5.account_info()
+            if self.account_info is None:
+                logger.error(f"获取账户信息失败: {mt5.last_error()}")
                 return False
                 
             logger.info("MT5连接成功")
@@ -163,9 +170,15 @@ class XiaohongshuRealDataGenerator:
                 return ""
             
             # 计算关键指标
-            initial_balance = 100000  # 初始资金
+            # 使用固定的初始资金10万美元，符合用户偏好设置
+            initial_balance = 100000
             final_balance = initial_balance + stats['total_profit']
-            total_return = (stats['total_profit'] / initial_balance) * 100
+            
+            # 如果能获取到真实账户信息，则使用真实账户余额
+            if self.account_info:
+                final_balance = self.account_info.balance
+                
+            total_return = (stats['total_profit'] / initial_balance) * 100 if initial_balance != 0 else 0
             win_rate = stats['win_rate']
             total_trades = stats['total_trades']
             
