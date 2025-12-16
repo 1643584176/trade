@@ -584,7 +584,6 @@ class Backtester:
         self.trade_history = []  # 交易历史
         self.equity_history = []  # 权益历史
         self.position_signal_details = {}  # 记录每个仓位的信号详情
-        self.daily_drawdown = {}  # 每日最大亏损值记录
 
     def run_backtest(self, df, model, feature_engineer):
         """
@@ -665,7 +664,7 @@ class Backtester:
                 self._execute_trade(df_with_features.iloc[i], signal)
                 
                 # 更新权益曲线
-                self._update_equity(df_with_features.iloc[i]['close'])
+                self._update_equity(df_with_features.iloc[i]['close'], df_with_features.iloc[i]['time'])
                 
                 # 显示进度
                 processed_count += 1
@@ -693,7 +692,7 @@ class Backtester:
             signal (int): 交易信号（1为做多，-1为做空，0为持有）
         """
         try:
-            # 先检查是否需要平仓（反向信号或强制平仓）
+            # 先检查是否需要平仓（反向信号）
             if len(self.positions) > 0:
                 current_position = self.positions[0]
                 
@@ -716,33 +715,6 @@ class Backtester:
                     })
                     
                     self.positions.clear()
-                    
-                # 检查是否需要强制平仓（盈利或亏损超过2000美元）
-                else:
-                    entry_price = current_position['entry_price']
-                    direction = current_position['direction']
-                    
-                    # 计算当前盈亏 (XAUUSD每点价值100美元)
-                    profit = (data['close'] - entry_price) * direction * 100 * current_position['lots']
-                    
-                    # 如果盈利或亏损超过2000美元，则强制平仓
-                    if abs(profit) >= 2000:
-                        self.balance += profit
-                        
-                        # 记录平仓交易
-                        exit_type = 'take_profit' if profit > 0 else 'stop_loss'
-                        self.trade_history.append({
-                            'timestamp': data['time'],
-                            'direction': 'close',
-                            'price': data['close'],
-                            'profit': profit,
-                            'balance': self.balance,
-                            'exit_type': exit_type,
-                            'position_entry_time': current_position['entry_time'],
-                            'position_direction': current_position['direction']
-                        })
-                        
-                        self.positions.clear()
             
             # 如果没有持仓且信号非0，则开仓
             if len(self.positions) == 0 and signal != 0:
@@ -798,12 +770,13 @@ class Backtester:
         except Exception as e:
             logger.error(f"平仓异常: {str(e)}")
     
-    def _update_equity(self, current_price):
+    def _update_equity(self, current_price, timestamp):
         """
         更新权益
         
         参数:
             current_price (float): 当前价格
+            timestamp (datetime): 当前时间戳
         """
         try:
             equity = self.balance
@@ -813,10 +786,11 @@ class Backtester:
                 equity += unrealized_pnl
             
             self.equity_history.append({
-                'timestamp': datetime.now(),
+                'timestamp': timestamp,
                 'equity': equity,
                 'balance': self.balance
             })
+                
         except Exception as e:
             logger.error(f"更新权益异常: {str(e)}")
 
@@ -865,34 +839,39 @@ class Backtester:
             all_trades = sorted(self.trade_history, key=lambda x: x['timestamp'])
             
             # 按天跟踪余额变化并计算最大亏损值
-            current_day = None
-            day_start_balance = self.initial_balance
-            day_min_balance = self.initial_balance
-            
-            for trade in all_trades:
-                trade_time = trade['timestamp']
-                trade_day = trade_time.strftime('%Y-%m-%d')
+            if all_trades:
+                # 按天分组所有交易记录
+                trades_by_day = {}
+                for trade in all_trades:
+                    day_key = trade['timestamp'].strftime('%Y-%m-%d')
+                    if day_key not in trades_by_day:
+                        trades_by_day[day_key] = []
+                    trades_by_day[day_key].append(trade)
                 
-                # 新的一天开始了
-                if current_day != trade_day:
-                    if current_day is not None and current_day in daily_data:
-                        # 记录前一天的最大亏损值（相对于当日初始余额）
+                # 对每一天计算最大回撤
+                for day_key, day_trades in trades_by_day.items():
+                    if day_trades:
+                        # 获取当日初始余额（使用第一个交易记录的余额）
+                        day_start_balance = day_trades[0]['balance']
+                        
+                        # 计算当日最大回撤
+                        day_min_balance = day_start_balance
+                        for trade in day_trades:
+                            if 'balance' in trade:
+                                day_min_balance = min(day_min_balance, trade['balance'])
+                        
                         max_drawdown = day_start_balance - day_min_balance
-                        daily_data[current_day]['max_drawdown'] = max_drawdown
-                    
-                    # 初始化新一天的跟踪变量
-                    current_day = trade_day
-                    day_start_balance = trade['balance'] if trade['direction'] == 'buy' or trade['direction'] == 'sell' else day_start_balance
-                    day_min_balance = day_start_balance
-                
-                # 更新当日最低余额
-                if 'balance' in trade:
-                    day_min_balance = min(day_min_balance, trade['balance'])
-            
-            # 处理最后一天
-            if current_day is not None and current_day in daily_data:
-                max_drawdown = day_start_balance - day_min_balance
-                daily_data[current_day]['max_drawdown'] = max_drawdown
+                        # 确保在daily_data中有这一天的记录
+                        if day_key not in daily_data:
+                            daily_data[day_key] = {
+                                'trade_count': 0,
+                                'total_profit': 0,
+                                'winning_trades': 0,
+                                'max_drawdown': max(0, max_drawdown),
+                                'ending_balance': day_trades[-1]['balance'] if 'balance' in day_trades[-1] else day_start_balance
+                            }
+                        else:
+                            daily_data[day_key]['max_drawdown'] = max(0, max_drawdown)
             
             return daily_data
         except Exception as e:

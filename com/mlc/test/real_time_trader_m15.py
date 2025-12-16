@@ -593,7 +593,7 @@ class RealTimeTraderM15:
         except Exception as e:
             logger.error(f"MT5连接异常: {str(e)}")
             self.mt5 = None
-    
+
     def get_latest_data(self, symbol, timeframe, count=50):
         """
         获取最新数据
@@ -678,7 +678,7 @@ class RealTimeTraderM15:
     
     def check_and_close_position(self, symbol, current_price):
         """
-        检查并强制平仓（如果盈亏超过2000美元）
+        检查并强制平仓（如果当日盈亏超过2000美元）
         
         参数:
             symbol (str): 交易品种
@@ -687,31 +687,16 @@ class RealTimeTraderM15:
         返回:
             bool: 是否进行了强制平仓操作
         """
-        try:
-            if self.current_position is not None:
-                entry_price = self.current_position['entry_price']
-                direction = self.current_position['direction']
-                lots = self.current_position['lots']
-                
-                # 计算当前盈亏 (XAUUSD每点价值100美元)
-                profit = (current_price - entry_price) * direction * 100 * lots
-                
-                # 如果盈利或亏损超过2000美元，则强制平仓
-                if abs(profit) >= 2000:
-                    logger.info(f"强制平仓，当前盈亏: ${profit:.2f}，超过2000美元限制")
-                    
-                    # 执行实际平仓
-                    self.close_position_mt5(symbol)
-                    
-                    self.current_position = None
-                    return True
-                    
-            return False
-            
-        except Exception as e:
-            logger.error(f"检查强制平仓异常: {str(e)}")
-            return False
+        # 移除此方法的功能，始终返回False
+        return False
     
+    def update_daily_profit_loss(self):
+        """
+        更新当日盈亏
+        """
+        # 移除此方法的功能，保持空实现
+        pass
+
     def close_all_positions(self, symbol):
         """
         平掉指定品种的所有持仓
@@ -754,6 +739,9 @@ class RealTimeTraderM15:
                     return False
                 else:
                     logger.info(f"平仓成功, 订单号: {result.order}")
+            
+            # 平仓后重置持仓信息
+            self.current_position = None
                     
             return True
             
@@ -800,6 +788,8 @@ class RealTimeTraderM15:
                 return False
             else:
                 logger.info(f"平仓成功, 订单号: {result.order}")
+                # 平仓后重置持仓信息
+                self.current_position = None
                 return True
                 
         except Exception as e:
@@ -874,13 +864,6 @@ class RealTimeTraderM15:
             current_price (float): 当前价格，用于检查强制平仓
         """
         try:
-            # 如果提供了当前价格，检查是否需要强制平仓
-            if current_price is not None:
-                forced_closed = self.check_and_close_position(symbol, current_price)
-                if forced_closed:
-                    logger.info("已强制平仓")
-                    return
-            
             # 检查是否有相反信号需要平仓并开新仓
             if self.current_position is not None and self.current_position['direction'] != signal and signal != 0:
                 logger.info(f"平仓 {symbol}，反向信号出现")

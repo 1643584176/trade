@@ -934,6 +934,22 @@ def main():
             for i, trade in enumerate(backtest_results['trade_details'][:10]):
                 logger.info(f"{i+1}. 买入时间: {trade['entry_time']}, 价格: {trade['entry_price']:.5f}, 方向: {trade['direction']} | "
                            f"卖出时间: {trade['exit_time']}, 价格: {trade['exit_price']:.5f} | 收益: ${trade['profit']:.2f}")
+                           
+            # 生成小红书内容
+            from generate_xiaohongshu_content import XiaohongshuContentGenerator
+            content_generator = XiaohongshuContentGenerator(backtest_results)
+            
+            # 保存日报内容到文件
+            daily_report = content_generator.generate_daily_report()
+            with open("xiaohongshu_daily_report.txt", "w", encoding="utf-8") as f:
+                f.write(daily_report)
+            
+            # 保存周报内容到文件
+            weekly_report = content_generator.generate_weekly_report()
+            with open("xiaohongshu_weekly_report.txt", "w", encoding="utf-8") as f:
+                f.write(weekly_report)
+                
+            logger.info("已生成小红书内容文件：xiaohongshu_daily_report.txt 和 xiaohongshu_weekly_report.txt")
         
         logger.info("AI交易模型回测完成!")
         
