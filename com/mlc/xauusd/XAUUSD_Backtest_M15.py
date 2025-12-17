@@ -1181,7 +1181,7 @@ def main(start_date=None, end_date=None):
         # 1. 初始化组件
         feature_engineer = FeatureEngineer()
         # 直接加载已训练好的模型，而不是重新训练
-        model = EvoAIModel("trained_model.pkl")
+        model = EvoAIModel("xauusd_trained_model.pkl")
         
         # 2. 获取数据（优先从MT5获取真实数据）
         logger.info("获取历史数据...")

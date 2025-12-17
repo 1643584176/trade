@@ -570,7 +570,7 @@ class RealTimeTraderM15:
     实时交易类
     """
     
-    def __init__(self, model_path="trained_model.pkl", magic_number=10032025):
+    def __init__(self, model_path="xauusd_trained_model.pkl", magic_number=10032025):
         """
         初始化实时交易器
         
