@@ -141,3 +141,6 @@ cython_debug/
 /com/mlc/gbpusd/gbpusd_trained_model.pkl
 /com/mlc/btcusd/btcusd_trained_model.pkl
 /com/mlc/xauusd/trained_model.pkl
+
+# Ignore all pkl files
+*.pkl

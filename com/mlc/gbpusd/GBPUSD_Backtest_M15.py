@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # 在文件顶部添加日期配置变量
-START_DATE = '2025-12-01'   # 格式: '2024-06-01' 或 None 使用默认值
-END_DATE = '2025-12-14'    # 格式: '2024-12-31' 或 None 使用默认值
+START_DATE = None   # 格式: '2024-06-01' 或 None 使用默认值
+END_DATE = None    # 格式: '2024-12-31' 或 None 使用默认值
 
 
 class MarketSessionAnalyzer:
@@ -1187,13 +1187,18 @@ def main(start_date=None, end_date=None):
             parsed_end_date = datetime.strptime(end_date, '%Y-%m-%d')
             logger.info(f"设置回测结束日期: {parsed_end_date}")
         
-        # 1. 获取数据（优先从MT5获取真实数据，失败时使用模拟数据）
+        # 1. 获取数据（优先从MT5获取真实数据）
         logger.info("获取历史数据...")
-        if parsed_start_date or parsed_end_date:
-            df = get_mt5_data_by_range("GBPUSD", "TIMEFRAME_M15", parsed_start_date, parsed_end_date)
-        else:
-            df = get_mt5_data("GBPUSD")
-        logger.info(f"获取到 {len(df)} 条历史数据")
+        try:
+            if parsed_start_date or parsed_end_date:
+                df = get_mt5_data_by_range("GBPUSD", "TIMEFRAME_M15", parsed_start_date, parsed_end_date)
+            else:
+                df = get_mt5_data("GBPUSD")
+            logger.info(f"获取到 {len(df)} 条历史数据")
+        except Exception as e:
+            logger.error(f"无法获取MT5数据: {str(e)}")
+            logger.error("由于无法获取真实市场数据且禁用模拟数据，程序将退出。")
+            return
         
         # 2. 初始化组件
         feature_engineer = FeatureEngineer()

@@ -194,7 +194,6 @@ class FeatureEngineer:
             # 使用市场时段分析器添加时段特征
             df = self.session_analyzer.add_session_features(df)
             
-            logger.info("时间特征添加完成")
             return df
             
         except Exception as e:
@@ -284,7 +283,6 @@ class FeatureEngineer:
             # 趋势强度特征
             df['trend_strength'] = abs(df['sma_5'] - df['sma_20']) / df['close']
             
-            logger.info("K线特征添加完成")
             return df
             
         except Exception as e:
@@ -348,7 +346,6 @@ class FeatureEngineer:
             # 添加反转点特征
             df_with_all_features = self.session_analyzer.detect_reversal_points(df_with_k_features)
             
-            logger.info("所有特征生成完成")
             return df_with_all_features
             
         except Exception as e:
@@ -568,28 +565,24 @@ class EvoAIModel:
             self._initialize_model()
 
 
-class RealTimeTrader:
+class RealTimeTraderM15:
     """
     实时交易类
     """
     
-    def __init__(self, model_path="trained_model.pkl"):
+    def __init__(self, model_path="eurusd_trained_model.pkl", magic_number=10032028):
         """
         初始化实时交易器
         
         参数:
             model_path (str): 模型路径
+            magic_number (int): 魔法数字，用于区分不同品种的订单
         """
         self.feature_engineer = FeatureEngineer()
         self.model = EvoAIModel(model_path)
         self.is_running = False
         self.current_position = None  # 当前持仓信息
-        self.daily_performance = {
-            'start_balance': 100000,
-            'current_balance': 100000,
-            'trades': 0,
-            'wins': 0
-        }  # 日常表现记录
+        self.magic_number = magic_number  # 魔法数字，用于隔离不同品种的订单
         
         # 初始化MT5连接
         try:
@@ -599,10 +592,53 @@ class RealTimeTrader:
                 raise Exception("MT5初始化失败")
             self.mt5 = mt5
             logger.info("MT5连接成功")
+            
+            # 初始化时检查现有持仓
+            self._check_existing_positions("EURUSD")
         except Exception as e:
             logger.error(f"MT5连接异常: {str(e)}")
             self.mt5 = None
-    
+
+    def _check_existing_positions(self, symbol):
+        """
+        检查MT5中现有的持仓
+        
+        参数:
+            symbol (str): 交易品种
+        """
+        try:
+            if self.mt5 is None:
+                logger.error("MT5未初始化")
+                return
+                
+            # 获取当前持仓
+            positions = self.mt5.positions_get(symbol=symbol)
+            if positions is None:
+                logger.warning("无法获取持仓信息")
+                return
+                
+            # 筛选出属于当前交易器的持仓（通过magic number）
+            filtered_positions = [pos for pos in positions if pos.magic == self.magic_number]
+            
+            if len(filtered_positions) > 0:
+                # 取第一个持仓作为当前持仓
+                position = filtered_positions[0]
+                self.current_position = {
+                    'ticket': position.ticket,
+                    'entry_time': datetime.fromtimestamp(position.time),
+                    'entry_price': position.price_open,
+                    'direction': 1 if position.type == self.mt5.ORDER_TYPE_BUY else -1,
+                    'lots': position.volume,
+                    'magic': position.magic
+                }
+                direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
+                logger.info(f"检测到现有持仓: {direction_str}, 入场价格: {self.current_position['entry_price']:.5f}, 手数: {self.current_position['lots']}")
+            else:
+                logger.info("未检测到现有持仓")
+                
+        except Exception as e:
+            logger.error(f"检查现有持仓异常: {str(e)}")
+
     def get_latest_data(self, symbol, timeframe, count=50):
         """
         获取最新数据
@@ -655,23 +691,30 @@ class RealTimeTrader:
             X = self.model.prepare_prediction_data(df_with_features.tail(50))  # 使用最近50条数据
             
             if X is None or len(X) == 0:
+                logger.info("特征数据为空，返回观望信号")
                 return 0
             
             # 预测
             prediction = self.model.predict(X.tail(1))  # 只使用最新的数据点
             
             if prediction is None:
+                logger.info("模型预测结果为空，返回观望信号")
                 return 0
             
             # 根据预测概率确定信号
             # 获取信号（概率大于0.55做多，小于0.45做空，否则持有）
             up_prob = prediction[0][1]
             
+            logger.info(f"预测概率 - 上涨: {up_prob:.4f}, 下跌: {1-up_prob:.4f}")
+            
             if up_prob > 0.55:
+                logger.info("决策: 做多")
                 return 1  # 做多
             elif up_prob < 0.45:
+                logger.info("决策: 做空")
                 return -1  # 做空
             else:
+                logger.info(f"决策: 观望 (概率区间0.45-0.55，当前概率: {up_prob:.4f})")
                 return 0  # 观望
                 
         except Exception as e:
@@ -680,7 +723,7 @@ class RealTimeTrader:
     
     def check_and_close_position(self, symbol, current_price):
         """
-        检查并强制平仓（如果盈亏超过2000美元）
+        检查并强制平仓（如果当日盈亏超过2000美元）
         
         参数:
             symbol (str): 交易品种
@@ -689,31 +732,175 @@ class RealTimeTrader:
         返回:
             bool: 是否进行了强制平仓操作
         """
+        # 移除此方法的功能，始终返回False
+        return False
+    
+    def update_daily_profit_loss(self):
+        """
+        更新当日盈亏
+        """
+        # 移除此方法的功能，保持空实现
+        pass
+
+    def close_all_positions(self, symbol):
+        """
+        平掉指定品种的所有持仓
+        
+        参数:
+            symbol (str): 交易品种
+        """
         try:
-            if self.current_position is not None:
-                entry_price = self.current_position['entry_price']
-                direction = self.current_position['direction']
-                lots = self.current_position['lots']
+            if self.mt5 is None:
+                logger.error("MT5未初始化")
+                return False
                 
-                # 计算当前盈亏 (XAUUSD每点价值100美元)
-                profit = (current_price - entry_price) * direction * 100 * lots
+            # 获取当前持仓
+            positions = self.mt5.positions_get(symbol=symbol)
+            if positions is None or len(positions) == 0:
+                logger.info("没有找到持仓")
+                return True
                 
-                # 如果盈利或亏损超过2000美元，则强制平仓
-                if abs(profit) >= 2000:
-                    logger.info(f"强制平仓，当前盈亏: ${profit:.2f}，超过2000美元限制")
+            # 筛选出属于当前交易器的持仓（通过magic number）
+            filtered_positions = [pos for pos in positions if pos.magic == self.magic_number]
+            
+            # 平掉所有持仓
+            for position in filtered_positions:
+                # 创建平仓请求
+                close_request = {
+                    "action": self.mt5.TRADE_ACTION_DEAL,
+                    "symbol": symbol,
+                    "volume": position.volume,
+                    "type": self.mt5.ORDER_TYPE_SELL if position.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY,
+                    "position": position.ticket,
+                    "price": self.mt5.symbol_info_tick(symbol).bid if position.type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask,
+                    "deviation": 20,
+                    "magic": self.magic_number,
+                    "comment": "AI策略平仓",
+                    "type_time": self.mt5.ORDER_TIME_GTC,
+                    "type_filling": self.mt5.ORDER_FILLING_IOC,
+                }
+                
+                # 发送平仓请求
+                result = self.mt5.order_send(close_request)
+                if result.retcode != self.mt5.TRADE_RETCODE_DONE:
+                    logger.error(f"平仓失败, 错误码: {result.retcode}")
+                    return False
+                else:
+                    logger.info(f"平仓成功, 订单号: {result.order}")
+            
+            # 平仓后重置持仓信息
+            self.current_position = None
                     
-                    # 在实际应用中，这里会调用MT5的平仓函数
-                    # self.close_position_mt5(symbol)
-                    
-                    self.current_position = None
-                    return True
-                    
-            return False
+            return True
             
         except Exception as e:
-            logger.error(f"检查强制平仓异常: {str(e)}")
+            logger.error(f"平仓异常: {str(e)}")
             return False
-    
+
+    def close_position_mt5(self, symbol):
+        """
+        平掉指定品种的当前持仓
+        
+        参数:
+            symbol (str): 交易品种
+        """
+        try:
+            if self.mt5 is None:
+                logger.error("MT5未初始化")
+                return False
+                
+            if self.current_position is None:
+                logger.info("没有持仓需要平仓")
+                return True
+                
+            # 创建平仓请求
+            position_type = self.mt5.ORDER_TYPE_BUY if self.current_position['direction'] > 0 else self.mt5.ORDER_TYPE_SELL
+            close_request = {
+                "action": self.mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": self.current_position['lots'],
+                "type": self.mt5.ORDER_TYPE_SELL if position_type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY,
+                "position": self.current_position['ticket'],
+                "price": self.mt5.symbol_info_tick(symbol).bid if position_type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask,
+                "deviation": 20,
+                "magic": self.magic_number,
+                "comment": "AI策略平仓",
+                "type_time": self.mt5.ORDER_TIME_GTC,
+                "type_filling": self.mt5.ORDER_FILLING_IOC,
+            }
+            
+            # 发送平仓请求
+            result = self.mt5.order_send(close_request)
+            if result.retcode != self.mt5.TRADE_RETCODE_DONE:
+                logger.error(f"平仓失败, 错误码: {result.retcode}")
+                return False
+            else:
+                logger.info(f"平仓成功, 订单号: {result.order}")
+                # 平仓后重置持仓信息
+                self.current_position = None
+                return True
+                
+        except Exception as e:
+            logger.error(f"平仓异常: {str(e)}")
+            return False
+
+    def open_position_mt5(self, symbol, signal, lot_size):
+        """
+        在MT5中开仓
+        
+        参数:
+            symbol (str): 交易品种
+            signal (int): 交易信号（1做多，-1做空）
+            lot_size (float): 手数
+            
+        返回:
+            int: 订单号，如果失败返回None
+        """
+        try:
+            if self.mt5 is None:
+                logger.error("MT5未初始化")
+                return None
+                
+            # 确定订单类型
+            order_type = self.mt5.ORDER_TYPE_BUY if signal > 0 else self.mt5.ORDER_TYPE_SELL
+            
+            # 获取当前价格
+            tick_info = self.mt5.symbol_info_tick(symbol)
+            if tick_info is None:
+                logger.error("无法获取品种报价信息")
+                return None
+                
+            price = tick_info.ask if signal > 0 else tick_info.bid
+            
+            # 创建订单请求
+            request = {
+                "action": self.mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": lot_size,
+                "type": order_type,
+                "price": price,
+                "sl": 0.0,  # 止损
+                "tp": 0.0,  # 止盈
+                "deviation": 20,
+                "magic": self.magic_number,  # 使用魔法数字隔离不同品种的订单
+                "comment": "AI策略开仓",
+                "type_time": self.mt5.ORDER_TIME_GTC,
+                "type_filling": self.mt5.ORDER_FILLING_IOC,
+            }
+            
+            # 发送订单请求
+            result = self.mt5.order_send(request)
+            if result.retcode != self.mt5.TRADE_RETCODE_DONE:
+                logger.error(f"开仓失败, 错误码: {result.retcode}")
+                return None
+            else:
+                logger.info(f"开仓成功, 订单号: {result.order}")
+                return result.order
+                
+        except Exception as e:
+            logger.error(f"开仓异常: {str(e)}")
+            return None
+
     def execute_trade(self, symbol, signal, lot_size=1.0, current_price=None):
         """
         执行交易
@@ -725,63 +912,75 @@ class RealTimeTrader:
             current_price (float): 当前价格，用于检查强制平仓
         """
         try:
-            # 如果提供了当前价格，检查是否需要强制平仓
-            if current_price is not None:
-                forced_closed = self.check_and_close_position(symbol, current_price)
-                if forced_closed:
-                    # 更新日常表现
-                    self.daily_performance['trades'] += 1
-                    # 这里应该从实际盈亏计算中判断是否盈利，简化处理
-                    self.daily_performance['wins'] += 0.5  # 简化处理
-                    logger.info("已强制平仓")
-                    return
-            
-            # 检查是否有相反信号需要平仓
+            # 检查是否有相反信号需要平仓并开新仓
             if self.current_position is not None and self.current_position['direction'] != signal and signal != 0:
                 logger.info(f"平仓 {symbol}，反向信号出现")
-                # 在实际应用中，这里会调用MT5的平仓函数
-                # self.close_position_mt5(symbol)
+                # 平掉当前持仓
+                self.close_all_positions(symbol)
                 self.current_position = None
-                # 更新日常表现
-                self.daily_performance['trades'] += 1
-                # 这里应该从实际盈亏计算中判断是否盈利，简化处理
-                self.daily_performance['wins'] += 0.5  # 简化处理
-            
-            # 如果没有持仓且信号非0，则开仓
-            if self.current_position is None and signal != 0:
-                logger.info(f"开仓 {symbol}，方向: {'做多' if signal > 0 else '做空'}，手数: {lot_size}")
-                # 在实际应用中，这里会调用MT5的开仓函数
-                # self.open_position_mt5(symbol, signal, lot_size)
-                # 使用从MT5获取的最新数据时间作为入场时间
-                df = self.get_latest_data(symbol, "TIMEFRAME_M15", 1)
-                entry_time = df['time'].iloc[-1] if df is not None and len(df) > 0 else datetime.now()
                 
-                self.current_position = {
-                    'entry_time': entry_time,
-                    'entry_price': current_price if current_price is not None else 0,
-                    'direction': int(signal),
-                    'lots': lot_size
-                }
+                # 反向开仓
+                logger.info(f"开仓 {symbol}，方向: {'做多' if signal > 0 else '做空'}，手数: {lot_size}")
+                # 执行实际下单
+                ticket = self.open_position_mt5(symbol, signal, lot_size)
+                if ticket is not None:
+                    # 使用从MT5获取的最新数据时间作为入场时间
+                    df = self.get_latest_data(symbol, "TIMEFRAME_M15", 1)
+                    entry_time = df['time'].iloc[-1] if df is not None and len(df) > 0 else datetime.now()
+                    
+                    self.current_position = {
+                        'ticket': ticket,
+                        'entry_time': entry_time,
+                        'entry_price': current_price if current_price is not None else 0,
+                        'direction': int(signal),
+                        'lots': lot_size
+                    }
+                else:
+                    logger.error("开仓失败")
+            # 如果没有持仓且信号非0，则开仓
+            elif self.current_position is None and signal != 0:
+                logger.info(f"开仓 {symbol}，方向: {'做多' if signal > 0 else '做空'}，手数: {lot_size}")
+                # 执行实际下单
+                ticket = self.open_position_mt5(symbol, signal, lot_size)
+                if ticket is not None:
+                    # 使用从MT5获取的最新数据时间作为入场时间
+                    df = self.get_latest_data(symbol, "TIMEFRAME_M15", 1)
+                    entry_time = df['time'].iloc[-1] if df is not None and len(df) > 0 else datetime.now()
+                    
+                    self.current_position = {
+                        'ticket': ticket,
+                        'entry_time': entry_time,
+                        'entry_price': current_price if current_price is not None else 0,
+                        'direction': int(signal),
+                        'lots': lot_size
+                    }
+                else:
+                    logger.error("开仓失败")
             elif signal == 0:
-                logger.info("观望，无交易信号")
+                pass  # 不再记录无交易信号的情况
                 
         except Exception as e:
             logger.error(f"执行交易异常: {str(e)}")
     
-    def run(self, symbol="XAUUSD", lot_size=1.0):
+    def run(self, symbol="EURUSD", lot_size=1.0):
         """
         运行实时交易
+        基于M15周期数据进行交易，当预测方向出现反向则平仓否则继续持仓
         
         参数:
             symbol (str): 交易品种
             lot_size (float): 手数
         """
         try:
-            logger.info(f"开始实时交易 {symbol}，手数: {lot_size}")
+            logger.info(f"开始基于M15周期的实时交易 {symbol}，手数: {lot_size}")
+            logger.info("策略: 当预测方向出现反向则平仓否则继续持仓")
             self.is_running = True
+            first_run = True
             
-            # 初始化日常表现跟踪
-            self.daily_performance['start_time'] = datetime.now()
+            # 如果已经有持仓，显示持仓信息
+            if self.current_position is not None:
+                direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
+                logger.info(f"启动时检测到持仓: {direction_str}, 入场价格: {self.current_position['entry_price']:.5f}")
             
             while self.is_running:
                 try:
@@ -793,8 +992,15 @@ class RealTimeTrader:
                         time.sleep(60)  # 等待1分钟
                         continue
                     
+                    logger.info(f"获取到 {len(df)} 根M15 K线数据用于分析")
+                    
                     # 获取当前价格
                     current_price = df['close'].iloc[-1]
+                    
+                    # 只在第一次运行时打印基本信息
+                    if first_run:
+                        logger.info(f"当前价格: {current_price:.5f}")
+                        first_run = False
                     
                     # 做出交易决策
                     signal = self.make_decision(df)
@@ -802,12 +1008,30 @@ class RealTimeTrader:
                     # 执行交易
                     self.execute_trade(symbol, signal, lot_size, current_price)
                     
-                    # 检查是否需要生成日报（每天固定时间）
-                    self._check_and_generate_report()
+                    # 打印当前持仓状态
+                    if self.current_position is not None:
+                        logger.info(f"当前持仓方向: {'做多' if self.current_position['direction'] > 0 else '做空'}, 入场价格: {self.current_position['entry_price']:.5f}")
+                    else:
+                        logger.info("当前无持仓")
                     
-                    # 等待1分钟
-                    logger.info("等待1分钟后继续执行")
-                    time.sleep(60)
+                    # 等待到下一个M15周期
+                    now = datetime.now()
+                    minutes = now.minute
+                    # 计算下一个15分钟周期的分钟数 (0, 15, 30, 45)
+                    next_minute = ((minutes // 15) + 1) * 15
+                    if next_minute == 60:
+                        next_minute = 0
+                    
+                    # 计算需要等待的秒数
+                    if next_minute > minutes:
+                        wait_minutes = next_minute - minutes
+                    else:
+                        wait_minutes = (60 - minutes) + next_minute
+                    
+                    wait_seconds = wait_minutes * 60 - now.second
+                    
+                    logger.info(f"等待 {wait_seconds} 秒到下一个M15周期")
+                    time.sleep(wait_seconds)
                     
                 except KeyboardInterrupt:
                     logger.info("收到停止信号，正在退出...")
@@ -815,105 +1039,25 @@ class RealTimeTrader:
                     break
                 except Exception as e:
                     logger.error(f"交易循环异常: {str(e)}")
-                    time.sleep(60)  # 出错后等待1分钟再试
+                    # 出错后等待到下一个M15周期
+                    now = datetime.now()
+                    minutes = now.minute
+                    next_minute = ((minutes // 15) + 1) * 15
+                    if next_minute == 60:
+                        next_minute = 0
+                    
+                    if next_minute > minutes:
+                        wait_minutes = next_minute - minutes
+                    else:
+                        wait_minutes = (60 - minutes) + next_minute
+                    
+                    wait_seconds = wait_minutes * 60 - now.second
+                    
+                    logger.info(f"出错后等待 {wait_seconds} 秒到下一个M15周期")
+                    time.sleep(wait_seconds)
                     
         except Exception as e:
             logger.error(f"运行实时交易异常: {str(e)}")
-    
-    def _check_and_generate_report(self):
-        """
-        检查是否需要生成报告并生成小红书内容
-        """
-        try:
-            # 每天UTC时间0点生成一次日报
-            now = datetime.utcnow()
-            if now.hour == 0 and now.minute < 5:  # 0点前5分钟内
-                # 检查今天是否已经生成过报告
-                today = now.date()
-                report_file = f"xiaohongshu_daily_report_{today}.txt"
-                
-                try:
-                    # 检查报告是否已存在
-                    import os
-                    if os.path.exists(report_file):
-                        return
-                except:
-                    pass
-                
-                # 生成小红书日报
-                try:
-                    from generate_xiaohongshu_content import XiaohongshuContentGenerator
-                    
-                    # 构造回测结果格式的数据
-                    backtest_results = {
-                        'initial_balance': self.daily_performance['start_balance'],
-                        'final_balance': self.daily_performance['current_balance'],
-                        'total_return_pct': ((self.daily_performance['current_balance'] / self.daily_performance['start_balance']) - 1) * 100,
-                        'total_trades': self.daily_performance['trades'],
-                        'profitable_trades': self.daily_performance['wins'],
-                        'win_rate': (self.daily_performance['wins'] / max(self.daily_performance['trades'], 1)) * 100,
-                        'buy_trades': int(self.daily_performance['trades'] / 2),
-                        'sell_trades': int(self.daily_performance['trades'] / 2)
-                    }
-                    
-                    generator = XiaohongshuContentGenerator(backtest_results)
-                    daily_report = generator.generate_daily_report()
-                    
-                    # 保存报告
-                    with open(report_file, "w", encoding="utf-8") as f:
-                        f.write(daily_report)
-                        
-                    logger.info(f"已生成小红书日报: {report_file}")
-                except Exception as e:
-                    logger.error(f"生成小红书日报异常: {str(e)}")
-        except Exception as e:
-            logger.error(f"检查生成报告异常: {str(e)}")
-    
-    def _wait_for_next_m15_period(self, symbol="XAUUSD"):
-        """
-        等待到下一个M15周期的开始时间
-        
-        参数:
-            symbol (str): 交易品种
-        """
-        try:
-            # 获取XAUUSD的当前市场时间
-            df = self.get_latest_data(symbol, "TIMEFRAME_M15", 1)
-            if df is not None and len(df) > 0:
-                # 使用最新的K线时间作为当前时间
-                now = df['time'].iloc[-1].to_pydatetime()
-            else:
-                # 如果无法获取市场时间，则使用系统时间并记录警告
-                now = datetime.now()
-                logger.warning("无法获取市场时间，使用系统时间")
-            
-            # 计算下一个M15周期的开始时间
-            # M15周期开始时间应该是00:00, 00:15, 00:30, 00:45, 01:00, ...
-            minutes = now.minute
-            next_minutes = ((minutes // 15) + 1) * 15
-            if next_minutes >= 60:
-                # 跨小时处理
-                next_hour = now.hour + 1
-                if next_hour >= 24:
-                    # 跨天处理
-                    next_time = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-                else:
-                    next_time = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
-            else:
-                next_time = now.replace(minute=next_minutes, second=0, microsecond=0)
-            
-            # 计算需要等待的时间
-            wait_seconds = (next_time - now).total_seconds()
-            if wait_seconds > 0:
-                logger.info(f"等待到下一个M15周期开始时间: {next_time.strftime('%Y-%m-%d %H:%M:%S')} (等待 {wait_seconds:.0f} 秒)")
-                time.sleep(wait_seconds)
-            else:
-                logger.info("已在M15周期开始时间点")
-                
-        except Exception as e:
-            logger.error(f"等待M15周期异常: {str(e)}")
-            # 出错时默认等待15分钟
-            time.sleep(15 * 60)
     
     def shutdown(self):
         """
@@ -933,11 +1077,11 @@ def main():
     """
     主函数
     """
-    trader = RealTimeTrader()
+    trader = RealTimeTraderM15()
     
     # 运行实时交易（在实际应用中取消注释下面一行）
-    trader.run("XAUUSD", 1.0)
-    logger.info("实时交易系统启动")
+    trader.run("EURUSD", 1.0)
+    logger.info("基于M15周期的实时交易系统启动")
 
 if __name__ == "__main__":
     main()

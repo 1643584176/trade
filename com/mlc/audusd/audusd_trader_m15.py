@@ -570,7 +570,7 @@ class RealTimeTraderM15:
     实时交易类
     """
     
-    def __init__(self, model_path="btcusd_trained_model.pkl", magic_number=10032027):
+    def __init__(self, model_path="audusd_trained_model.pkl", magic_number=10032027):
         """
         初始化实时交易器
         
@@ -594,7 +594,7 @@ class RealTimeTraderM15:
             logger.info("MT5连接成功")
             
             # 初始化时检查现有持仓
-            self._check_existing_positions("BTCUSD")
+            self._check_existing_positions("AUDUSD")
         except Exception as e:
             logger.error(f"MT5连接异常: {str(e)}")
             self.mt5 = None
@@ -823,7 +823,7 @@ class RealTimeTraderM15:
                 "position": self.current_position['ticket'],
                 "price": self.mt5.symbol_info_tick(symbol).bid if position_type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask,
                 "deviation": 20,
-                "magic": 10032025,
+                "magic": self.magic_number,
                 "comment": "AI策略平仓",
                 "type_time": self.mt5.ORDER_TIME_GTC,
                 "type_filling": self.mt5.ORDER_FILLING_IOC,
@@ -962,7 +962,7 @@ class RealTimeTraderM15:
         except Exception as e:
             logger.error(f"执行交易异常: {str(e)}")
     
-    def run(self, symbol="BTCUSD", lot_size=1.0):
+    def run(self, symbol="AUDUSD", lot_size=1.0):
         """
         运行实时交易
         基于M15周期数据进行交易，当预测方向出现反向则平仓否则继续持仓
@@ -1008,80 +1008,38 @@ class RealTimeTraderM15:
                     # 执行交易
                     self.execute_trade(symbol, signal, lot_size, current_price)
                     
-                    # 打印当前持仓状态
-                    if self.current_position is not None:
-                        logger.info(f"当前持仓方向: {'做多' if self.current_position['direction'] > 0 else '做空'}, 入场价格: {self.current_position['entry_price']:.5f}")
-                    else:
-                        logger.info("当前无持仓")
-                    
-                    # 等待到下一个M15周期
-                    now = datetime.now()
-                    minutes = now.minute
-                    # 计算下一个15分钟周期的分钟数 (0, 15, 30, 45)
-                    next_minute = ((minutes // 15) + 1) * 15
-                    if next_minute == 60:
-                        next_minute = 0
-                    
-                    # 计算需要等待的秒数
-                    if next_minute > minutes:
-                        wait_minutes = next_minute - minutes
-                    else:
-                        wait_minutes = (60 - minutes) + next_minute
-                    
-                    wait_seconds = wait_minutes * 60 - now.second
-                    
-                    logger.info(f"等待 {wait_seconds} 秒到下一个M15周期")
-                    time.sleep(wait_seconds)
+                    # 等待下一个M15周期 (15分钟 = 900秒)
+                    logger.info("等待下一个M15周期...")
+                    time.sleep(900)
                     
                 except KeyboardInterrupt:
-                    logger.info("收到停止信号，正在退出...")
+                    logger.info("收到键盘中断信号，停止交易...")
                     self.is_running = False
                     break
                 except Exception as e:
                     logger.error(f"交易循环异常: {str(e)}")
-                    # 出错后等待到下一个M15周期
-                    now = datetime.now()
-                    minutes = now.minute
-                    next_minute = ((minutes // 15) + 1) * 15
-                    if next_minute == 60:
-                        next_minute = 0
-                    
-                    if next_minute > minutes:
-                        wait_minutes = next_minute - minutes
-                    else:
-                        wait_minutes = (60 - minutes) + next_minute
-                    
-                    wait_seconds = wait_minutes * 60 - now.second
-                    
-                    logger.info(f"出错后等待 {wait_seconds} 秒到下一个M15周期")
-                    time.sleep(wait_seconds)
+                    time.sleep(60)  # 出现异常时等待1分钟后继续
                     
         except Exception as e:
             logger.error(f"运行实时交易异常: {str(e)}")
-    
-    def shutdown(self):
-        """
-        关闭交易器
-        """
-        try:
-            self.is_running = False
-            # 关闭MT5连接
-            if self.mt5 is not None:
-                self.mt5.shutdown()
-            logger.info("实时交易器已关闭")
-        except Exception as e:
-            logger.error(f"关闭交易器异常: {str(e)}")
+        finally:
+            logger.info("实时交易结束")
 
 
 def main():
     """
     主函数
     """
-    trader = RealTimeTraderM15()
-    
-    # 运行实时交易（在实际应用中取消注释下面一行）
-    trader.run("BTCUSD", 1.0)
-    logger.info("基于M15周期的实时交易系统启动")
+    try:
+        # 创建实时交易器实例
+        trader = RealTimeTraderM15(model_path="audusd_trained_model.pkl", magic_number=10032027)
+        
+        # 运行实时交易
+        trader.run(symbol="AUDUSD", lot_size=1.0)
+        
+    except Exception as e:
+        logger.error(f"主函数异常: {str(e)}")
+
 
 if __name__ == "__main__":
     main()
