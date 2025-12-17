@@ -570,7 +570,7 @@ class RealTimeTraderM15:
     实时交易类
     """
     
-    def __init__(self, model_path="eurusd_trained_model.pkl", magic_number=10032028):
+    def __init__(self, model_path="eurusd_trained_model.pkl", magic_number=10032032):
         """
         初始化实时交易器
         
@@ -656,8 +656,8 @@ class RealTimeTraderM15:
                 logger.error("MT5未初始化")
                 return None
                 
-            # 从MT5获取实时数据
-            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 0, count)
+            # 从MT5获取实时数据，多获取一根K线然后去掉最后一根未完成的K线
+            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 1, count)
             
             if rates is None or len(rates) == 0:
                 logger.warning("获取MT5数据失败或数据为空")
@@ -1077,7 +1077,7 @@ def main():
     """
     主函数
     """
-    trader = RealTimeTraderM15()
+    trader = RealTimeTraderM15(model_path="eurusd_trained_model.pkl", magic_number=10032032)
     
     # 运行实时交易（在实际应用中取消注释下面一行）
     trader.run("EURUSD", 1.0)

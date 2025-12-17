@@ -656,8 +656,8 @@ class RealTimeTraderM15:
                 logger.error("MT5未初始化")
                 return None
                 
-            # 从MT5获取实时数据
-            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 0, count)
+            # 从MT5获取实时数据，多获取一根K线然后去掉最后一根未完成的K线
+            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 1, count)
             
             if rates is None or len(rates) == 0:
                 logger.warning("获取MT5数据失败或数据为空")
@@ -1007,6 +1007,12 @@ class RealTimeTraderM15:
                     
                     # 执行交易
                     self.execute_trade(symbol, signal, lot_size, current_price)
+                    
+                    # 打印当前持仓状态
+                    if self.current_position is not None:
+                        logger.info(f"当前持仓方向: {'做多' if self.current_position['direction'] > 0 else '做空'}, 入场价格: {self.current_position['entry_price']:.5f}")
+                    else:
+                        logger.info("当前无持仓")
                     
                     # 等待下一个M15周期 (15分钟 = 900秒)
                     logger.info("等待下一个M15周期...")

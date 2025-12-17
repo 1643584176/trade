@@ -4,6 +4,8 @@ import subprocess
 import logging
 from pathlib import Path
 import time
+import MetaTrader5 as mt5
+from datetime import datetime, date
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,9 +24,81 @@ def get_currency_pairs():
             # 检查目录中是否有实时交易文件
             trader_files = list(item.glob("*_trader_m15.py"))
             if trader_files:
-                currency_dirs.append((item.name, str(trader_files[0]).replace("/", "\\")))
+                currency_dirs.append((item.name, str(trader_files[0])))
     
     return currency_dirs
+
+def check_ftmo_limit():
+    """
+    检查FTMO账户的每日最大亏损限制
+    FTMO挑战账户每日最大亏损不能超过4500美元
+    
+    Returns:
+        bool: True表示可以交易(亏损未超标)，False表示不可交易(亏损超标)
+    """
+    try:
+        # 初始化MT5连接
+        if not mt5.initialize():
+            logger.error("MT5初始化失败")
+            return False
+        
+        # 获取账户信息
+        account_info = mt5.account_info()
+        if account_info is None:
+            logger.error("无法获取账户信息")
+            mt5.shutdown()
+            return False
+        
+        # 获取今日日期
+        today = date.today()
+        from_date = datetime(today.year, today.month, today.day)
+        to_date = datetime.now()
+        
+        # 获取今日历史交易记录
+        deals = mt5.history_deals_get(from_date, to_date)
+        today_deals_profit = 0
+        if deals is not None:
+            for deal in deals:
+                # 确认是今天的交易
+                deal_time = datetime.fromtimestamp(deal.time)
+                if deal_time.date() == today:
+                    today_deals_profit += deal.profit
+        
+        # 获取当前持仓信息
+        positions = mt5.positions_get()
+        current_positions_profit = 0
+        if positions is not None:
+            for position in positions:
+                # 只计算今天的持仓
+                position_time = datetime.fromtimestamp(position.time)
+                if position_time.date() == today:
+                    current_positions_profit += position.profit
+        
+        # 计算今日总盈亏（历史交易盈亏 + 当前持仓盈亏）
+        total_today_profit = today_deals_profit + current_positions_profit
+        
+        mt5.shutdown()
+        
+        # 检查是否超过FTMO限制（亏损超过4500美元）
+        logger.info(f"今日历史交易盈亏: {today_deals_profit:.2f} USD")
+        logger.info(f"今日持仓盈亏: {current_positions_profit:.2f} USD")
+        logger.info(f"今日总盈亏: {total_today_profit:.2f} USD")
+        
+        if total_today_profit < -4500:  # 亏损超过4500美元
+            logger.error(f"FTMO限制检查失败：今日总亏损 {abs(total_today_profit):.2f} USD 已超过最大允许亏损 4500 USD")
+            return False
+        else:
+            logger.info(f"FTMO限制检查通过：今日总亏损 {abs(total_today_profit):.2f} USD 未超过限制")
+            return True
+            
+    except Exception as e:
+        logger.error(f"检查FTMO限制时出错: {str(e)}")
+        # 出错时保守起见不允许交易
+        try:
+            mt5.shutdown()
+        except:
+            pass
+        return False
 
 def start_single_trader(currency_pair, trader_file_path):
     """
@@ -46,7 +120,7 @@ def start_single_trader(currency_pair, trader_file_path):
         # 使用subprocess.Popen启动独立进程
         process = subprocess.Popen(
             [sys.executable, trader_file_path],
-            cwd="D:/newProject/Trader/com/mlc",
+            cwd=os.path.dirname(trader_file_path),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
@@ -63,6 +137,12 @@ def start_all_traders():
     启动所有货币对的实时交易
     """
     logger.info("开始启动所有实时交易...")
+    
+    # 首先检查FTMO限制
+    logger.info("检查FTMO每日最大亏损限制...")
+    if not check_ftmo_limit():
+        logger.error("FTMO每日最大亏损限制检查失败，今日亏损已超过4500美元，取消启动所有交易")
+        return [], []  # 返回空的成功和失败列表
     
     # 获取所有货币对
     currency_pairs = get_currency_pairs()

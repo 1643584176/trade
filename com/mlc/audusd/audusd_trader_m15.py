@@ -570,7 +570,7 @@ class RealTimeTraderM15:
     实时交易类
     """
     
-    def __init__(self, model_path="audusd_trained_model.pkl", magic_number=10032027):
+    def __init__(self, model_path="audusd_trained_model.pkl", magic_number=10032031):
         """
         初始化实时交易器
         
@@ -642,12 +642,12 @@ class RealTimeTraderM15:
     def get_latest_data(self, symbol, timeframe, count=50):
         """
         获取最新数据
-        
+
         参数:
             symbol (str): 交易品种
             timeframe: 时间周期
             count (int): 获取K线数量
-            
+
         返回:
             DataFrame: 最新数据
         """
@@ -655,20 +655,20 @@ class RealTimeTraderM15:
             if self.mt5 is None:
                 logger.error("MT5未初始化")
                 return None
-                
-            # 从MT5获取实时数据
-            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 0, count)
-            
+
+            # 从MT5获取实时数据，多获取一根K线然后去掉最后一根未完成的K线
+            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 1, count)
+
             if rates is None or len(rates) == 0:
                 logger.warning("获取MT5数据失败或数据为空")
                 return None
-            
+
             # 转换为DataFrame
             df = pd.DataFrame(rates)
             df['time'] = pd.to_datetime(df['time'], unit='s')
-            
+
             return df
-            
+
         except Exception as e:
             logger.error(f"获取最新数据异常: {str(e)}")
             return None
@@ -1032,7 +1032,7 @@ def main():
     """
     try:
         # 创建实时交易器实例
-        trader = RealTimeTraderM15(model_path="audusd_trained_model.pkl", magic_number=10032027)
+        trader = RealTimeTraderM15(model_path="audusd_trained_model.pkl", magic_number=10032031)
         
         # 运行实时交易
         trader.run(symbol="AUDUSD", lot_size=1.0)

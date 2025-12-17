@@ -38,23 +38,29 @@ def train_single_model(currency_pair, backtest_file_path):
     try:
         logger.info(f"开始训练 {currency_pair} 模型...")
         
-        # 检查回测文件是否存在
-        if not os.path.exists(backtest_file_path):
-            logger.error(f"找不到回测文件: {backtest_file_path}")
+        # 获取货币对目录
+        backtest_dir = os.path.dirname(backtest_file_path)
+        
+        # 构造训练文件路径
+        training_file_name = f"{currency_pair.upper()}_模型训练.py"
+        training_file_path = os.path.join(backtest_dir, training_file_name)
+        
+        # 检查训练文件是否存在
+        if not os.path.exists(training_file_path):
+            logger.error(f"找不到训练文件: {training_file_path}")
             return False
         
         # 保存当前工作目录
         original_cwd = os.getcwd()
         
-        # 切换到回测文件所在目录，确保模型保存在同一目录下
-        backtest_dir = os.path.dirname(backtest_file_path)
+        # 切换到训练文件所在目录
         os.chdir(backtest_dir)
         
         try:
-            # 动态导入并执行回测文件中的main函数
-            spec = importlib.util.spec_from_file_location(f"{currency_pair}_backtest", backtest_file_path)
+            # 动态导入并执行训练文件中的main函数
+            spec = importlib.util.spec_from_file_location(f"{currency_pair}_training", training_file_path)
             module = importlib.util.module_from_spec(spec)
-            sys.modules[f"{currency_pair}_backtest"] = module  # 添加到sys.modules防止循环导入
+            sys.modules[f"{currency_pair}_training"] = module  # 添加到sys.modules防止循环导入
             spec.loader.exec_module(module)
             
             # 执行main函数进行训练
@@ -63,7 +69,7 @@ def train_single_model(currency_pair, backtest_file_path):
                 logger.info(f"{currency_pair} 模型训练完成")
                 return True
             else:
-                logger.error(f"{currency_pair} 回测文件中没有找到main函数")
+                logger.error(f"{currency_pair} 训练文件中没有找到main函数")
                 return False
         finally:
             # 恢复原来的工作目录
