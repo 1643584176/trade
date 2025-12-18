@@ -745,7 +745,7 @@ class RealTimeTraderM15:
                         symbol).bid if position.type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(
                         symbol).ask,
                     "deviation": 20,
-                    "magic": 10032025,
+                    "magic": 10000002,
                     "comment": "AI策略平仓",
                     "type_time": self.mt5.ORDER_TIME_GTC,
                     "type_filling": self.mt5.ORDER_FILLING_IOC,
@@ -793,7 +793,7 @@ class RealTimeTraderM15:
                 "price": self.mt5.symbol_info_tick(
                     symbol).bid if position_type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask,
                 "deviation": 20,
-                "magic": 10032025,
+                "magic": 10000002,
                 "comment": "AI策略平仓",
                 "type_time": self.mt5.ORDER_TIME_GTC,
                 "type_filling": self.mt5.ORDER_FILLING_IOC,
@@ -850,7 +850,7 @@ class RealTimeTraderM15:
                 "sl": 0.0,  # 止损
                 "tp": 0.0,  # 止盈
                 "deviation": 20,
-                "magic": 10032025,
+                "magic": 10000002,
                 "comment": "AI策略开仓",
                 "type_time": self.mt5.ORDER_TIME_GTC,
                 "type_filling": self.mt5.ORDER_FILLING_IOC,

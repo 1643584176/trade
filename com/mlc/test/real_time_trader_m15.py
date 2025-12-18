@@ -109,9 +109,10 @@ class MarketSessionAnalyzer:
 
             # 检测价格极值点作为反转信号
             # 通过比较当前价格与前后几个周期的价格来识别局部极值
+            # 注意：使用center=False避免未来数据泄露
             window = 5
-            local_highs = (df['close'] == df['close'].rolling(window=window * 2 + 1, center=True).max())
-            local_lows = (df['close'] == df['close'].rolling(window=window * 2 + 1, center=True).min())
+            local_highs = (df['close'] == df['close'].rolling(window=window * 2 + 1, center=False).max())
+            local_lows = (df['close'] == df['close'].rolling(window=window * 2 + 1, center=False).min())
             df['local_high'] = local_highs.astype(int)
             df['local_low'] = local_lows.astype(int)
 
@@ -583,6 +584,7 @@ class RealTimeTraderM15:
         self.model = EvoAIModel(model_path)
         self.is_running = False
         self.current_position = None  # 当前持仓信息
+        self.magic_number = 10000002  # 魔法数字，用于区分不同品种的订单
 
         # 初始化MT5连接
         try:
@@ -617,15 +619,19 @@ class RealTimeTraderM15:
                 logger.warning("无法获取持仓信息")
                 return
 
-            if len(positions) > 0:
+            # 筛选出属于当前交易器的持仓（通过magic number）
+            filtered_positions = [pos for pos in positions if pos.magic == self.magic_number]
+
+            if len(filtered_positions) > 0:
                 # 取第一个持仓作为当前持仓
-                position = positions[0]
+                position = filtered_positions[0]
                 self.current_position = {
                     'ticket': position.ticket,
                     'entry_time': datetime.fromtimestamp(position.time),
                     'entry_price': position.price_open,
                     'direction': 1 if position.type == self.mt5.ORDER_TYPE_BUY else -1,
-                    'lots': position.volume
+                    'lots': position.volume,
+                    'magic': position.magic
                 }
                 direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
                 logger.info(
@@ -757,8 +763,11 @@ class RealTimeTraderM15:
                 logger.info("没有找到持仓")
                 return True
 
+            # 筛选出属于当前交易器的持仓（通过magic number）
+            filtered_positions = [pos for pos in positions if pos.magic == self.magic_number]
+
             # 平掉所有持仓
-            for position in positions:
+            for position in filtered_positions:
                 # 创建平仓请求
                 close_request = {
                     "action": self.mt5.TRADE_ACTION_DEAL,
@@ -770,7 +779,7 @@ class RealTimeTraderM15:
                         symbol).bid if position.type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(
                         symbol).ask,
                     "deviation": 20,
-                    "magic": 10032025,
+                    "magic": self.magic_number,
                     "comment": "AI策略平仓",
                     "type_time": self.mt5.ORDER_TIME_GTC,
                     "type_filling": self.mt5.ORDER_FILLING_IOC,
@@ -821,7 +830,7 @@ class RealTimeTraderM15:
                 "price": self.mt5.symbol_info_tick(
                     symbol).bid if position_type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask,
                 "deviation": 20,
-                "magic": 10032025,
+                "magic": self.magic_number,
                 "comment": "AI策略平仓",
                 "type_time": self.mt5.ORDER_TIME_GTC,
                 "type_filling": self.mt5.ORDER_FILLING_IOC,
@@ -880,7 +889,7 @@ class RealTimeTraderM15:
                 "sl": 0.0,  # 止损
                 "tp": 0.0,  # 止盈
                 "deviation": 20,
-                "magic": 10032025,
+                "magic": self.magic_number,
                 "comment": "AI策略开仓",
                 "type_time": self.mt5.ORDER_TIME_GTC,
                 "type_filling": self.mt5.ORDER_FILLING_IOC,

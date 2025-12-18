@@ -108,9 +108,10 @@ class MarketSessionAnalyzer:
             
             # 检测价格极值点作为反转信号
             # 通过比较当前价格与前后几个周期的价格来识别局部极值
+            # 注意：使用center=False避免未来数据泄露
             window = 5
-            local_highs = (df['close'] == df['close'].rolling(window=window*2+1, center=True).max())
-            local_lows = (df['close'] == df['close'].rolling(window=window*2+1, center=True).min())
+            local_highs = (df['close'] == df['close'].rolling(window=window*2+1, center=False).max())
+            local_lows = (df['close'] == df['close'].rolling(window=window*2+1, center=False).min())
             df['local_high'] = local_highs.astype(int)
             df['local_low'] = local_lows.astype(int)
             
@@ -570,7 +571,7 @@ class RealTimeTraderM15:
     实时交易类
     """
     
-    def __init__(self, model_path="btcusd_trained_model.pkl", magic_number=10032027):
+    def __init__(self, model_path="btcusd_trained_model.pkl", magic_number=30000001):
         """
         初始化实时交易器
         
@@ -823,7 +824,7 @@ class RealTimeTraderM15:
                 "position": self.current_position['ticket'],
                 "price": self.mt5.symbol_info_tick(symbol).bid if position_type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask,
                 "deviation": 20,
-                "magic": 10032025,
+                "magic": self.magic_number,
                 "comment": "AI策略平仓",
                 "type_time": self.mt5.ORDER_TIME_GTC,
                 "type_filling": self.mt5.ORDER_FILLING_IOC,

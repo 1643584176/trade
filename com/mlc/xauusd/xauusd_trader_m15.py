@@ -108,9 +108,10 @@ class MarketSessionAnalyzer:
             
             # 检测价格极值点作为反转信号
             # 通过比较当前价格与前后几个周期的价格来识别局部极值
+            # 注意：使用center=False避免未来数据泄露
             window = 5
-            local_highs = (df['close'] == df['close'].rolling(window=window*2+1, center=True).max())
-            local_lows = (df['close'] == df['close'].rolling(window=window*2+1, center=True).min())
+            local_highs = (df['close'] == df['close'].rolling(window=window*2+1, center=False).max())
+            local_lows = (df['close'] == df['close'].rolling(window=window*2+1, center=False).min())
             df['local_high'] = local_highs.astype(int)
             df['local_low'] = local_lows.astype(int)
             
@@ -570,7 +571,7 @@ class RealTimeTraderM15:
     实时交易类
     """
     
-    def __init__(self, model_path="xauusd_trained_model.pkl", magic_number=10032025):
+    def __init__(self, model_path="xauusd_trained_model.pkl", magic_number=10000001):
         """
         初始化实时交易器
         
@@ -657,7 +658,7 @@ class RealTimeTraderM15:
                 return None
                 
             # 从MT5获取实时数据
-            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 0, count)
+            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 1, count)
             
             if rates is None or len(rates) == 0:
                 logger.warning("获取MT5数据失败或数据为空")
