@@ -14,7 +14,7 @@ def get_currency_pairs():
     """
     获取所有货币对目录
     """
-    base_path = Path("D:/newProject/Trader/com/mlc")
+    base_path = Path("/com/mlc")
     currency_dirs = []
     
     # 遍历目录查找货币对文件夹
