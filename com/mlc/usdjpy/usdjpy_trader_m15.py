@@ -1015,9 +1015,24 @@ class RealTimeTraderM15:
                     else:
                         logger.info("当前无持仓")
                     
-                    # 等待下一个M15周期 (15分钟 = 900秒)
-                    logger.info("等待下一个M15周期...")
-                    time.sleep(900)
+                    # 等待到下一个M15周期
+                    now = datetime.now()
+                    minutes = now.minute
+                    # 计算下一个15分钟周期的分钟数 (0, 15, 30, 45)
+                    next_minute = ((minutes // 15) + 1) * 15
+                    if next_minute == 60:
+                        next_minute = 0
+                    
+                    # 计算需要等待的秒数
+                    if next_minute > minutes:
+                        wait_minutes = next_minute - minutes
+                    else:
+                        wait_minutes = (60 - minutes) + next_minute
+                    
+                    wait_seconds = wait_minutes * 60 - now.second
+                    
+                    logger.info(f"等待 {wait_seconds} 秒到下一个M15周期")
+                    time.sleep(wait_seconds)
                     
                 except KeyboardInterrupt:
                     logger.info("收到键盘中断信号，停止交易...")
