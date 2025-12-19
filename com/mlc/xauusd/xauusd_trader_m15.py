@@ -938,6 +938,22 @@ class RealTimeTraderM15:
                     }
                 else:
                     logger.error("开仓失败")
+            # 检查是否需要因为盈利足够而平仓
+            elif self.current_position is not None and signal == 0:
+                # 计算当前持仓盈利
+                profit = 0
+                if self.current_position['direction'] > 0:  # 做多
+                    profit = (current_price - self.current_position['entry_price']) * 100  # XAUUSD标准合约乘数
+                else:  # 做空
+                    profit = (self.current_position['entry_price'] - current_price) * 100  # XAUUSD标准合约乘数
+                
+                # 如果盈利超过100美元，则平仓
+                if profit > 100:
+                    logger.info(f"平仓 {symbol}，观望信号且盈利超过100美元: {profit:.2f}美元")
+                    self.close_all_positions(symbol)
+                    self.current_position = None
+                else:
+                    logger.info(f"当前盈利未超过100美元: {profit:.2f}美元，继续持仓")
             # 如果没有持仓且信号非0，则开仓
             elif self.current_position is None and signal != 0:
                 logger.info(f"开仓 {symbol}，方向: {'做多' if signal > 0 else '做空'}，手数: {lot_size}")
