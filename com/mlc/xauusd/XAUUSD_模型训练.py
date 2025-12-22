@@ -75,6 +75,9 @@ def train_xauusd_model():
         # 获取当前目录
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
+        # 获取当前包名
+        package_name = os.path.basename(current_dir)
+        
         # 添加当前目录到系统路径
         sys.path.append(current_dir)
         
@@ -117,8 +120,14 @@ def train_xauusd_model():
         logger.info("开始训练模型...")
         model.train(X, y)
         
+        # 删除旧的模型文件
+        model_filename = f"{package_name}_trained_model.pkl"
+        model_file = os.path.join(current_dir, model_filename)
+        if os.path.exists(model_file):
+            logger.info(f"删除旧的模型文件: {model_file}")
+            os.remove(model_file)
+        
         # 保存模型
-        model_file = os.path.join(current_dir, "xauusd_trained_model.pkl")
         logger.info(f"保存模型到 {model_file}...")
         model.save_model(model_file)
         

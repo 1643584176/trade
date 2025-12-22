@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-USDCAD 模型训练脚本
-此脚本专门用于训练 USDCAD 货币对的 AI 交易模型
+XAUUSD 模型训练脚本
+此脚本专门用于训练 XAUUSD 货币对的 AI 交易模型
 """
 
 import sys
@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def get_mt5_data(symbol="USDCAD", timeframe="TIMEFRAME_M15", days=365):
+def get_mt5_data(symbol="XAUUSD", timeframe="TIMEFRAME_M15", days=40):
     """
     从MT5获取历史数据
     
@@ -65,32 +65,35 @@ def get_mt5_data(symbol="USDCAD", timeframe="TIMEFRAME_M15", days=365):
         raise Exception(f"无法获取MT5数据: {str(e)}")
 
 
-def train_usdcad_model():
+def train_xauusd_model():
     """
-    训练 USDCAD 模型
+    训练 XAUUSD 模型
     """
     try:
-        logger.info("开始训练 USDCAD 模型...")
+        logger.info("开始训练 XAUUSD 模型...")
         
         # 获取当前目录
         current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # 获取当前包名
+        package_name = os.path.basename(current_dir)
         
         # 添加当前目录到系统路径
         sys.path.append(current_dir)
         
         # 动态导入回测文件中的类
-        backtest_file = os.path.join(current_dir, "USDCAD_Backtest_M15.py")
+        backtest_file = os.path.join(current_dir, "XAUUSD_Backtest_M15.py")
         if not os.path.exists(backtest_file):
             logger.error(f"找不到回测文件: {backtest_file}")
             return False
         
         # 导入必要的类
-        from USDCAD_Backtest_M15 import FeatureEngineer, EvoAIModel
+        from XAUUSD_Backtest_M15 import FeatureEngineer, EvoAIModel
         
         # 获取数据
         logger.info("获取历史数据...")
         try:
-            df = get_mt5_data("USDCAD", "TIMEFRAME_M15", 365)
+            df = get_mt5_data("XAUUSD", "TIMEFRAME_M15", 365)
             logger.info(f"获取到 {len(df)} 条历史数据")
         except Exception as e:
             logger.error(f"无法获取MT5数据: {str(e)}")
@@ -117,30 +120,36 @@ def train_usdcad_model():
         logger.info("开始训练模型...")
         model.train(X, y)
         
+        # 删除旧的模型文件
+        model_filename = f"{package_name}_trained_model.pkl"
+        model_file = os.path.join(current_dir, model_filename)
+        if os.path.exists(model_file):
+            logger.info(f"删除旧的模型文件: {model_file}")
+            os.remove(model_file)
+        
         # 保存模型
-        model_file = os.path.join(current_dir, "usdcad_trained_model.pkl")
         logger.info(f"保存模型到 {model_file}...")
         model.save_model(model_file)
         
-        logger.info("USDCAD 模型训练完成")
+        logger.info("XAUUSD 模型训练完成")
         return True
         
     except Exception as e:
-        logger.error(f"训练 USDCAD 模型时出错: {str(e)}")
+        logger.error(f"训练 XAUUSD 模型时出错: {str(e)}")
         return False
 
 def main():
     """
     主函数
     """
-    logger.info("=== USDCAD 模型训练程序启动 ===")
+    logger.info("=== XAUUSD 模型训练程序启动 ===")
     
-    success = train_usdcad_model()
+    success = train_xauusd_model()
     
     if success:
-        logger.info("=== USDCAD 模型训练成功完成 ===")
+        logger.info("=== XAUUSD 模型训练成功完成 ===")
     else:
-        logger.error("=== USDCAD 模型训练失败 ===")
+        logger.error("=== XAUUSD 模型训练失败 ===")
 
 if __name__ == "__main__":
     main()

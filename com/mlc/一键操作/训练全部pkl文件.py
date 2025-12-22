@@ -14,12 +14,13 @@ def get_currency_pairs():
     """
     获取所有货币对目录
     """
-    base_path = Path("/com/mlc")
+    # 使用相对路径
+    base_path = Path(__file__).parent.parent
     currency_dirs = []
     
     # 遍历目录查找货币对文件夹
     for item in base_path.iterdir():
-        if item.is_dir() and item.name not in ['test', 'templates']:
+        if item.is_dir() and item.name not in ['test', 'test_1.0.2', '一键操作']:
             # 检查目录中是否有回测文件
             backtest_files = list(item.glob("*_Backtest_M15.py"))
             if backtest_files:

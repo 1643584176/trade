@@ -420,10 +420,9 @@ class EvoAIModel:
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
                 'bb_position', 'trend_strength'
             ]
-            
-            # 创建目标变量（未来1小时的价格变动方向）
+
             df = df.copy()
-            df['future_return'] = df['close'].shift(-4) / df['close'] - 1  # M15数据，4个周期为1小时
+            df['future_return'] = df['close'].shift(-2) / df['close'] - 1  # M15数据，2个周期为半小时
             df['target'] = (df['future_return'] > 0).astype(int)  # 1表示上涨，0表示下跌
             
             # 删除含有NaN的行（仅在训练时使用）
@@ -472,6 +471,8 @@ class EvoAIModel:
             ]
             
             X = df[feature_columns]
+            # 删除包含NaN的行，确保不会在预测时使用不完整的数据
+            X = X.dropna()
             return X
             
         except Exception as e:
@@ -571,7 +572,7 @@ class RealTimeTraderM15:
     实时交易类
     """
     
-    def __init__(self, model_path="usdjpy_trained_model.pkl", magic_number=50000001):
+    def __init__(self, model_path="xauusd_trained_model.pkl", magic_number=10000001):
         """
         初始化实时交易器
         
@@ -595,7 +596,7 @@ class RealTimeTraderM15:
             logger.info("MT5连接成功")
             
             # 初始化时检查现有持仓
-            self._check_existing_positions("USDJPY")
+            self._check_existing_positions("XAUUSD")
         except Exception as e:
             logger.error(f"MT5连接异常: {str(e)}")
             self.mt5 = None
@@ -673,7 +674,7 @@ class RealTimeTraderM15:
         except Exception as e:
             logger.error(f"获取最新数据异常: {str(e)}")
             return None
-
+    
     def make_decision(self, df):
         """
         做出交易决策
@@ -938,6 +939,22 @@ class RealTimeTraderM15:
                     }
                 else:
                     logger.error("开仓失败")
+            # 检查是否需要因为盈利足够而平仓
+            elif self.current_position is not None and signal == 0:
+                # 计算当前持仓盈利
+                profit = 0
+                if self.current_position['direction'] > 0:  # 做多
+                    profit = (current_price - self.current_position['entry_price']) * 100  # XAUUSD标准合约乘数
+                else:  # 做空
+                    profit = (self.current_position['entry_price'] - current_price) * 100  # XAUUSD标准合约乘数
+                
+                # 如果盈利超过100美元，则平仓
+                if profit > 100:
+                    logger.info(f"平仓 {symbol}，观望信号且盈利超过100美元: {profit:.2f}美元")
+                    self.close_all_positions(symbol)
+                    self.current_position = None
+                else:
+                    logger.info(f"当前盈利未超过100美元: {profit:.2f}美元，继续持仓")
             # 如果没有持仓且信号非0，则开仓
             elif self.current_position is None and signal != 0:
                 logger.info(f"开仓 {symbol}，方向: {'做多' if signal > 0 else '做空'}，手数: {lot_size}")
@@ -963,7 +980,7 @@ class RealTimeTraderM15:
         except Exception as e:
             logger.error(f"执行交易异常: {str(e)}")
     
-    def run(self, symbol="USDJPY", lot_size=1.0):
+    def run(self, symbol="XAUUSD", lot_size=1.0):
         """
         运行实时交易
         基于M15周期数据进行交易，当预测方向出现反向则平仓否则继续持仓
@@ -978,6 +995,9 @@ class RealTimeTraderM15:
             self.is_running = True
             first_run = True
             
+            # 检查是否存在停止交易的标志文件
+            stop_flag_file = "stop_trading.flag"
+            
             # 如果已经有持仓，显示持仓信息
             if self.current_position is not None:
                 direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
@@ -987,6 +1007,13 @@ class RealTimeTraderM15:
             
             while self.is_running:
                 try:
+                    # 检查是否存在停止交易的标志文件
+                    if os.path.exists(stop_flag_file):
+                        logger.info("🛑 检测到停止交易标志文件，正在平仓并停止交易...")
+                        self.close_all_positions(symbol)
+                        self.is_running = False
+                        break
+                    
                     # 获取最新数据
                     df = self.get_latest_data(symbol, "TIMEFRAME_M15", 100)
                     
@@ -999,13 +1026,17 @@ class RealTimeTraderM15:
                     current_bar_time = df['time'].iloc[-1]
                     if last_bar_time is not None and current_bar_time <= last_bar_time:
                         logger.info("等待新的M15 K线形成...")
-                        time.sleep(30)  # 等待30秒再尝试
+                        time.sleep(5)  # 等待30秒再尝试
                         continue
                     
                     # 更新上一次的K线时间
                     last_bar_time = current_bar_time
                     
+                    # 显示K线数据的时间范围
+                    start_time = df['time'].iloc[0]
+                    end_time = df['time'].iloc[-1]
                     logger.info(f"获取到 {len(df)} 根M15 K线数据用于分析")
+                    logger.info(f"K线时间范围: 从 {start_time} 到 {end_time}")
                     
                     # 获取当前价格
                     current_price = df['close'].iloc[-1]
@@ -1047,33 +1078,54 @@ class RealTimeTraderM15:
                     time.sleep(wait_seconds)
                     
                 except KeyboardInterrupt:
-                    logger.info("收到键盘中断信号，停止交易...")
+                    logger.info("收到停止信号，正在退出...")
                     self.is_running = False
                     break
                 except Exception as e:
                     logger.error(f"交易循环异常: {str(e)}")
-                    time.sleep(60)  # 出现异常时等待1分钟后继续
+                    # 出错后等待到下一个M15周期
+                    now = datetime.now()
+                    minutes = now.minute
+                    next_minute = ((minutes // 15) + 1) * 15
+                    if next_minute == 60:
+                        next_minute = 0
+                    
+                    if next_minute > minutes:
+                        wait_minutes = next_minute - minutes
+                    else:
+                        wait_minutes = (60 - minutes) + next_minute
+                    
+                    wait_seconds = wait_minutes * 60 - now.second
+                    
+                    logger.info(f"出错后等待 {wait_seconds} 秒到下一个M15周期")
+                    time.sleep(wait_seconds)
                     
         except Exception as e:
             logger.error(f"运行实时交易异常: {str(e)}")
-        finally:
-            logger.info("实时交易结束")
+    
+    def shutdown(self):
+        """
+        关闭交易器
+        """
+        try:
+            self.is_running = False
+            # 关闭MT5连接
+            if self.mt5 is not None:
+                self.mt5.shutdown()
+            logger.info("实时交易器已关闭")
+        except Exception as e:
+            logger.error(f"关闭交易器异常: {str(e)}")
 
 
 def main():
     """
     主函数
     """
-    try:
-        # 创建实时交易器实例
-        trader = RealTimeTraderM15()
-        
-        # 运行实时交易
-        trader.run(symbol="USDJPY", lot_size=1.0)
-        
-    except Exception as e:
-        logger.error(f"主函数异常: {str(e)}")
-
+    trader = RealTimeTraderM15()
+    
+    # 运行实时交易（在实际应用中取消注释下面一行）
+    trader.run("XAUUSD", 1.0)
+    logger.info("基于M15周期的实时交易系统启动")
 
 if __name__ == "__main__":
     main()
