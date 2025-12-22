@@ -127,6 +127,26 @@ class MarketSessionAnalyzer:
             # 计算价格尖峰特征（价格突然大幅波动）
             df['price_spike'] = (df['abs_price_change'] > df['abs_price_change'].rolling(window=20).mean() * 2).astype(int)
             
+            # 计算方向持续性强度 - 结合 streak 和 价格变化幅度
+            df['direction_persistence'] = df['direction_streak'] * df['abs_price_change']
+            
+            # 添加收益特征，用于判断持仓是否应该平仓
+            # 计算当前价格相对于开盘价的收益率
+            df['intraday_return'] = (df['close'] - df['open']) / df['open']
+            
+            # 计算当前价格相对于最高价和最低价的位置
+            df['position_to_high'] = (df['high'] - df['close']) / (df['high'] - df['low'] + 1e-8)
+            df['position_to_low'] = (df['close'] - df['low']) / (df['high'] - df['low'] + 1e-8)
+            
+            # 计算上影线和下影线相对于实体的比例
+            df['upper_shadow_ratio'] = df['upper_shadow'] / (df['body'] + 1e-8)
+            df['lower_shadow_ratio'] = df['lower_shadow'] / (df['body'] + 1e-8)
+            
+            # 计算价格回撤特征 - 当前价格距离最高价的回撤幅度
+            df['high_drawdown'] = (df['high'] - df['close']) / (df['high'] - df['open'] + 1e-8)
+            # 当前价格距离最低价的反弹幅度
+            df['low_bounce'] = (df['close'] - df['low']) / (df['open'] - df['low'] + 1e-8)
+            
             return df
             
         except Exception as e:
@@ -417,7 +437,12 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength', 'reversal_position',
+                'historical_returns', 'recent_high', 'recent_low',
+                'direction_streak', 'direction_persistence', 'price_direction',
+                'recent_trade_performance', 'consecutive_wins', 'consecutive_losses', 'win_rate',
+                'intraday_return', 'position_to_high', 'position_to_low',
+                'upper_shadow_ratio', 'lower_shadow_ratio', 'high_drawdown', 'low_bounce'
             ]
             
             # 创建目标变量（未来1小时的价格变动方向）
@@ -467,7 +492,12 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength', 'reversal_position',
+                'historical_returns', 'recent_high', 'recent_low',
+                'direction_streak', 'direction_persistence', 'price_direction',
+                'recent_trade_performance', 'consecutive_wins', 'consecutive_losses', 'win_rate',
+                'intraday_return', 'position_to_high', 'position_to_low',
+                'upper_shadow_ratio', 'lower_shadow_ratio', 'high_drawdown', 'low_bounce'
             ]
             
             X = df[feature_columns]
