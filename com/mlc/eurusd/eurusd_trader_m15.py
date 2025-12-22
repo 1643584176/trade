@@ -657,7 +657,7 @@ class RealTimeTraderM15:
                 logger.error("MT5未初始化")
                 return None
                 
-            # 从MT5获取实时数据，多获取一根K线然后去掉最后一根未完成的K线
+            # 从MT5获取实时数据
             rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 1, count)
             
             if rates is None or len(rates) == 0:
@@ -673,296 +673,7 @@ class RealTimeTraderM15:
         except Exception as e:
             logger.error(f"获取最新数据异常: {str(e)}")
             return None
-    
-    def make_decision(self, df):
-        """
-        做出交易决策
-        
-        参数:
-            df (DataFrame): 数据
-            
-        返回:
-            int: 交易信号（1做多，-1做空，0观望）
-        """
-        try:
-            # 特征工程
-            df_with_features = self.feature_engineer.generate_features(df)
-            
-            # 准备数据用于预测
-            X = self.model.prepare_prediction_data(df_with_features.tail(50))  # 使用最近50条数据
-            
-            if X is None or len(X) == 0:
-                logger.info("特征数据为空，返回观望信号")
-                return 0
-            
-            # 预测
-            prediction = self.model.predict(X.tail(1))  # 只使用最新的数据点
-            
-            if prediction is None:
-                logger.info("模型预测结果为空，返回观望信号")
-                return 0
-            
-            # 根据预测概率确定信号
-            # 获取信号（概率大于0.55做多，小于0.45做空，否则持有）
-            up_prob = prediction[0][1]
-            
-            logger.info(f"预测概率 - 上涨: {up_prob:.4f}, 下跌: {1-up_prob:.4f}")
-            
-            if up_prob > 0.55:
-                logger.info("决策: 做多")
-                return 1  # 做多
-            elif up_prob < 0.45:
-                logger.info("决策: 做空")
-                return -1  # 做空
-            else:
-                logger.info(f"决策: 观望 (概率区间0.45-0.55，当前概率: {up_prob:.4f})")
-                return 0  # 观望
-                
-        except Exception as e:
-            logger.error(f"做出交易决策异常: {str(e)}")
-            return 0
-    
-    def check_and_close_position(self, symbol, current_price):
-        """
-        检查并强制平仓（如果当日盈亏超过2000美元）
-        
-        参数:
-            symbol (str): 交易品种
-            current_price (float): 当前价格
-            
-        返回:
-            bool: 是否进行了强制平仓操作
-        """
-        # 移除此方法的功能，始终返回False
-        return False
-    
-    def update_daily_profit_loss(self):
-        """
-        更新当日盈亏
-        """
-        # 移除此方法的功能，保持空实现
-        pass
 
-    def close_all_positions(self, symbol):
-        """
-        平掉指定品种的所有持仓
-        
-        参数:
-            symbol (str): 交易品种
-        """
-        try:
-            if self.mt5 is None:
-                logger.error("MT5未初始化")
-                return False
-                
-            # 获取当前持仓
-            positions = self.mt5.positions_get(symbol=symbol)
-            if positions is None or len(positions) == 0:
-                logger.info("没有找到持仓")
-                return True
-                
-            # 筛选出属于当前交易器的持仓（通过magic number）
-            filtered_positions = [pos for pos in positions if pos.magic == self.magic_number]
-            
-            # 平掉所有持仓
-            for position in filtered_positions:
-                # 创建平仓请求
-                close_request = {
-                    "action": self.mt5.TRADE_ACTION_DEAL,
-                    "symbol": symbol,
-                    "volume": position.volume,
-                    "type": self.mt5.ORDER_TYPE_SELL if position.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY,
-                    "position": position.ticket,
-                    "price": self.mt5.symbol_info_tick(symbol).bid if position.type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask,
-                    "deviation": 20,
-                    "magic": self.magic_number,
-                    "comment": "AI策略平仓",
-                    "type_time": self.mt5.ORDER_TIME_GTC,
-                    "type_filling": self.mt5.ORDER_FILLING_IOC,
-                }
-                
-                # 发送平仓请求
-                result = self.mt5.order_send(close_request)
-                if result.retcode != self.mt5.TRADE_RETCODE_DONE:
-                    logger.error(f"平仓失败, 错误码: {result.retcode}")
-                    return False
-                else:
-                    logger.info(f"平仓成功, 订单号: {result.order}")
-            
-            # 平仓后重置持仓信息
-            self.current_position = None
-                    
-            return True
-            
-        except Exception as e:
-            logger.error(f"平仓异常: {str(e)}")
-            return False
-
-    def close_position_mt5(self, symbol):
-        """
-        平掉指定品种的当前持仓
-        
-        参数:
-            symbol (str): 交易品种
-        """
-        try:
-            if self.mt5 is None:
-                logger.error("MT5未初始化")
-                return False
-                
-            if self.current_position is None:
-                logger.info("没有持仓需要平仓")
-                return True
-                
-            # 创建平仓请求
-            position_type = self.mt5.ORDER_TYPE_BUY if self.current_position['direction'] > 0 else self.mt5.ORDER_TYPE_SELL
-            close_request = {
-                "action": self.mt5.TRADE_ACTION_DEAL,
-                "symbol": symbol,
-                "volume": self.current_position['lots'],
-                "type": self.mt5.ORDER_TYPE_SELL if position_type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY,
-                "position": self.current_position['ticket'],
-                "price": self.mt5.symbol_info_tick(symbol).bid if position_type == self.mt5.ORDER_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask,
-                "deviation": 20,
-                "magic": self.magic_number,
-                "comment": "AI策略平仓",
-                "type_time": self.mt5.ORDER_TIME_GTC,
-                "type_filling": self.mt5.ORDER_FILLING_IOC,
-            }
-            
-            # 发送平仓请求
-            result = self.mt5.order_send(close_request)
-            if result.retcode != self.mt5.TRADE_RETCODE_DONE:
-                logger.error(f"平仓失败, 错误码: {result.retcode}")
-                return False
-            else:
-                logger.info(f"平仓成功, 订单号: {result.order}")
-                # 平仓后重置持仓信息
-                self.current_position = None
-                return True
-                
-        except Exception as e:
-            logger.error(f"平仓异常: {str(e)}")
-            return False
-
-    def open_position_mt5(self, symbol, signal, lot_size):
-        """
-        在MT5中开仓
-        
-        参数:
-            symbol (str): 交易品种
-            signal (int): 交易信号（1做多，-1做空）
-            lot_size (float): 手数
-            
-        返回:
-            int: 订单号，如果失败返回None
-        """
-        try:
-            if self.mt5 is None:
-                logger.error("MT5未初始化")
-                return None
-                
-            # 确定订单类型
-            order_type = self.mt5.ORDER_TYPE_BUY if signal > 0 else self.mt5.ORDER_TYPE_SELL
-            
-            # 获取当前价格
-            tick_info = self.mt5.symbol_info_tick(symbol)
-            if tick_info is None:
-                logger.error("无法获取品种报价信息")
-                return None
-                
-            price = tick_info.ask if signal > 0 else tick_info.bid
-            
-            # 创建订单请求
-            request = {
-                "action": self.mt5.TRADE_ACTION_DEAL,
-                "symbol": symbol,
-                "volume": lot_size,
-                "type": order_type,
-                "price": price,
-                "sl": 0.0,  # 止损
-                "tp": 0.0,  # 止盈
-                "deviation": 20,
-                "magic": self.magic_number,  # 使用魔法数字隔离不同品种的订单
-                "comment": "AI策略开仓",
-                "type_time": self.mt5.ORDER_TIME_GTC,
-                "type_filling": self.mt5.ORDER_FILLING_IOC,
-            }
-            
-            # 发送订单请求
-            result = self.mt5.order_send(request)
-            if result.retcode != self.mt5.TRADE_RETCODE_DONE:
-                logger.error(f"开仓失败, 错误码: {result.retcode}")
-                return None
-            else:
-                logger.info(f"开仓成功, 订单号: {result.order}")
-                return result.order
-                
-        except Exception as e:
-            logger.error(f"开仓异常: {str(e)}")
-            return None
-
-    def execute_trade(self, symbol, signal, lot_size=1.0, current_price=None):
-        """
-        执行交易
-        
-        参数:
-            symbol (str): 交易品种
-            signal (int): 信号
-            lot_size (float): 手数
-            current_price (float): 当前价格，用于检查强制平仓
-        """
-        try:
-            # 检查是否有相反信号需要平仓并开新仓
-            if self.current_position is not None and self.current_position['direction'] != signal and signal != 0:
-                logger.info(f"平仓 {symbol}，反向信号出现")
-                # 平掉当前持仓
-                self.close_all_positions(symbol)
-                self.current_position = None
-                
-                # 反向开仓
-                logger.info(f"开仓 {symbol}，方向: {'做多' if signal > 0 else '做空'}，手数: {lot_size}")
-                # 执行实际下单
-                ticket = self.open_position_mt5(symbol, signal, lot_size)
-                if ticket is not None:
-                    # 使用从MT5获取的最新数据时间作为入场时间
-                    df = self.get_latest_data(symbol, "TIMEFRAME_M15", 1)
-                    entry_time = df['time'].iloc[-1] if df is not None and len(df) > 0 else datetime.now()
-                    
-                    self.current_position = {
-                        'ticket': ticket,
-                        'entry_time': entry_time,
-                        'entry_price': current_price if current_price is not None else 0,
-                        'direction': int(signal),
-                        'lots': lot_size
-                    }
-                else:
-                    logger.error("开仓失败")
-            # 如果没有持仓且信号非0，则开仓
-            elif self.current_position is None and signal != 0:
-                logger.info(f"开仓 {symbol}，方向: {'做多' if signal > 0 else '做空'}，手数: {lot_size}")
-                # 执行实际下单
-                ticket = self.open_position_mt5(symbol, signal, lot_size)
-                if ticket is not None:
-                    # 使用从MT5获取的最新数据时间作为入场时间
-                    df = self.get_latest_data(symbol, "TIMEFRAME_M15", 1)
-                    entry_time = df['time'].iloc[-1] if df is not None and len(df) > 0 else datetime.now()
-                    
-                    self.current_position = {
-                        'ticket': ticket,
-                        'entry_time': entry_time,
-                        'entry_price': current_price if current_price is not None else 0,
-                        'direction': int(signal),
-                        'lots': lot_size
-                    }
-                else:
-                    logger.error("开仓失败")
-            elif signal == 0:
-                pass  # 不再记录无交易信号的情况
-                
-        except Exception as e:
-            logger.error(f"执行交易异常: {str(e)}")
-    
     def run(self, symbol="EURUSD", lot_size=1.0):
         """
         运行实时交易
@@ -983,6 +694,8 @@ class RealTimeTraderM15:
                 direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
                 logger.info(f"启动时检测到持仓: {direction_str}, 入场价格: {self.current_position['entry_price']:.5f}")
             
+            last_bar_time = None  # 记录上一次K线的时间
+            
             while self.is_running:
                 try:
                     # 获取最新数据
@@ -992,6 +705,16 @@ class RealTimeTraderM15:
                         logger.warning("数据不足，等待下次更新")
                         time.sleep(60)  # 等待1分钟
                         continue
+                    
+                    # 检查K线时间，确保我们使用的是新数据
+                    current_bar_time = df['time'].iloc[-1]
+                    if last_bar_time is not None and current_bar_time <= last_bar_time:
+                        logger.info("等待新的M15 K线形成...")
+                        time.sleep(30)  # 等待30秒再尝试
+                        continue
+                    
+                    # 更新上一次的K线时间
+                    last_bar_time = current_bar_time
                     
                     logger.info(f"获取到 {len(df)} 根M15 K线数据用于分析")
                     

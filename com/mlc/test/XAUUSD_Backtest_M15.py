@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # 在文件顶部添加日期配置变量
 START_DATE = '2025-01-01'  # 格式: '2024-06-01' 或 None 使用默认值
-END_DATE = '2025-12-18'  # 格式: '2024-12-31' 或 None 使用默认值
+END_DATE = '2025-12-22'  # 格式: '2024-12-31' 或 None 使用默认值
 
 
 class MarketSessionAnalyzer:

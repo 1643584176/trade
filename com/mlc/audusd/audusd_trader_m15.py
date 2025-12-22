@@ -657,7 +657,7 @@ class RealTimeTraderM15:
                 logger.error("MT5未初始化")
                 return None
 
-            # 从MT5获取实时数据，多获取一根K线然后去掉最后一根未完成的K线
+            # 从MT5获取实时数据
             rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 1, count)
 
             if rates is None or len(rates) == 0:
@@ -673,7 +673,7 @@ class RealTimeTraderM15:
         except Exception as e:
             logger.error(f"获取最新数据异常: {str(e)}")
             return None
-    
+
     def make_decision(self, df):
         """
         做出交易决策
@@ -962,12 +962,12 @@ class RealTimeTraderM15:
                 
         except Exception as e:
             logger.error(f"执行交易异常: {str(e)}")
-    
+
     def run(self, symbol="AUDUSD", lot_size=1.0):
         """
         运行实时交易
         基于M15周期数据进行交易，当预测方向出现反向则平仓否则继续持仓
-        
+
         参数:
             symbol (str): 交易品种
             lot_size (float): 手数
@@ -977,42 +977,54 @@ class RealTimeTraderM15:
             logger.info("策略: 当预测方向出现反向则平仓否则继续持仓")
             self.is_running = True
             first_run = True
-            
+
             # 如果已经有持仓，显示持仓信息
             if self.current_position is not None:
                 direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
                 logger.info(f"启动时检测到持仓: {direction_str}, 入场价格: {self.current_position['entry_price']:.5f}")
-            
+
+            last_bar_time = None  # 记录上一次K线的时间
+
             while self.is_running:
                 try:
                     # 获取最新数据
                     df = self.get_latest_data(symbol, "TIMEFRAME_M15", 100)
-                    
+
                     if df is None or len(df) < 50:
                         logger.warning("数据不足，等待下次更新")
                         time.sleep(60)  # 等待1分钟
                         continue
-                    
+
+                    # 检查K线时间，确保我们使用的是新数据
+                    current_bar_time = df['time'].iloc[-1]
+                    if last_bar_time is not None and current_bar_time <= last_bar_time:
+                        logger.info("等待新的M15 K线形成...")
+                        time.sleep(30)  # 等待30秒再尝试
+                        continue
+
+                    # 更新上一次的K线时间
+                    last_bar_time = current_bar_time
+
                     logger.info(f"获取到 {len(df)} 根M15 K线数据用于分析")
-                    
+
                     # 获取当前价格
                     current_price = df['close'].iloc[-1]
-                    
+
                     # 只在第一次运行时打印基本信息
                     if first_run:
                         logger.info(f"当前价格: {current_price:.5f}")
                         first_run = False
-                    
+
                     # 做出交易决策
                     signal = self.make_decision(df)
-                    
+
                     # 执行交易
                     self.execute_trade(symbol, signal, lot_size, current_price)
-                    
+
                     # 等待下一个M15周期 (15分钟 = 900秒)
                     logger.info("等待下一个M15周期...")
                     time.sleep(900)
-                    
+
                 except KeyboardInterrupt:
                     logger.info("收到键盘中断信号，停止交易...")
                     self.is_running = False
@@ -1020,7 +1032,7 @@ class RealTimeTraderM15:
                 except Exception as e:
                     logger.error(f"交易循环异常: {str(e)}")
                     time.sleep(60)  # 出现异常时等待1分钟后继续
-                    
+
         except Exception as e:
             logger.error(f"运行实时交易异常: {str(e)}")
         finally:

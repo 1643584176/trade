@@ -657,7 +657,7 @@ class RealTimeTraderM15:
                 logger.error("MT5未初始化")
                 return None
                 
-            # 从MT5获取实时数据，多获取一根K线然后去掉最后一根未完成的K线
+            # 从MT5获取实时数据
             rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 1, count)
             
             if rates is None or len(rates) == 0:
@@ -673,7 +673,7 @@ class RealTimeTraderM15:
         except Exception as e:
             logger.error(f"获取最新数据异常: {str(e)}")
             return None
-    
+
     def make_decision(self, df):
         """
         做出交易决策
@@ -983,6 +983,8 @@ class RealTimeTraderM15:
                 direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
                 logger.info(f"启动时检测到持仓: {direction_str}, 入场价格: {self.current_position['entry_price']:.5f}")
             
+            last_bar_time = None  # 记录上一次K线的时间
+            
             while self.is_running:
                 try:
                     # 获取最新数据
@@ -992,6 +994,16 @@ class RealTimeTraderM15:
                         logger.warning("数据不足，等待下次更新")
                         time.sleep(60)  # 等待1分钟
                         continue
+                    
+                    # 检查K线时间，确保我们使用的是新数据
+                    current_bar_time = df['time'].iloc[-1]
+                    if last_bar_time is not None and current_bar_time <= last_bar_time:
+                        logger.info("等待新的M15 K线形成...")
+                        time.sleep(30)  # 等待30秒再尝试
+                        continue
+                    
+                    # 更新上一次的K线时间
+                    last_bar_time = current_bar_time
                     
                     logger.info(f"获取到 {len(df)} 根M15 K线数据用于分析")
                     

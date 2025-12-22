@@ -472,6 +472,8 @@ class EvoAIModel:
             ]
             
             X = df[feature_columns]
+            # 删除包含NaN的行，确保不会在预测时使用不完整的数据
+            X = X.dropna()
             return X
             
         except Exception as e:
@@ -994,13 +996,25 @@ class RealTimeTraderM15:
             self.is_running = True
             first_run = True
             
+            # 检查是否存在停止交易的标志文件
+            stop_flag_file = "stop_trading.flag"
+            
             # 如果已经有持仓，显示持仓信息
             if self.current_position is not None:
                 direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
                 logger.info(f"启动时检测到持仓: {direction_str}, 入场价格: {self.current_position['entry_price']:.5f}")
             
+            last_bar_time = None  # 记录上一次K线的时间
+            
             while self.is_running:
                 try:
+                    # 检查是否存在停止交易的标志文件
+                    if os.path.exists(stop_flag_file):
+                        logger.info("🛑 检测到停止交易标志文件，正在平仓并停止交易...")
+                        self.close_all_positions(symbol)
+                        self.is_running = False
+                        break
+                    
                     # 获取最新数据
                     df = self.get_latest_data(symbol, "TIMEFRAME_M15", 100)
                     
@@ -1009,7 +1023,21 @@ class RealTimeTraderM15:
                         time.sleep(60)  # 等待1分钟
                         continue
                     
+                    # 检查K线时间，确保我们使用的是新数据
+                    current_bar_time = df['time'].iloc[-1]
+                    if last_bar_time is not None and current_bar_time <= last_bar_time:
+                        logger.info("等待新的M15 K线形成...")
+                        time.sleep(5)  # 等待30秒再尝试
+                        continue
+                    
+                    # 更新上一次的K线时间
+                    last_bar_time = current_bar_time
+                    
+                    # 显示K线数据的时间范围
+                    start_time = df['time'].iloc[0]
+                    end_time = df['time'].iloc[-1]
                     logger.info(f"获取到 {len(df)} 根M15 K线数据用于分析")
+                    logger.info(f"K线时间范围: 从 {start_time} 到 {end_time}")
                     
                     # 获取当前价格
                     current_price = df['close'].iloc[-1]
