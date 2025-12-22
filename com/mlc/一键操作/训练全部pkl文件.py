@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 import traceback
 import time
+import glob
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,18 +15,57 @@ def get_currency_pairs():
     """
     获取所有货币对目录
     """
-    base_path = Path("/com/mlc")
+    base_path = Path("D:/newProject/Trader/com/mlc")
     currency_dirs = []
     
     # 遍历目录查找货币对文件夹
     for item in base_path.iterdir():
-        if item.is_dir() and item.name not in ['test', 'templates']:
+        if item.is_dir() and item.name not in ['test', 'templates', '一键操作']:
             # 检查目录中是否有回测文件
             backtest_files = list(item.glob("*_Backtest_M15.py"))
             if backtest_files:
                 currency_dirs.append((item.name, str(backtest_files[0])))
     
     return currency_dirs
+
+def remove_existing_pkl_files(currency_pair, backtest_dir):
+    """
+    删除现有的pkl文件
+    
+    Args:
+        currency_pair (str): 货币对名称
+        backtest_dir (str): 回测文件所在目录
+    """
+    try:
+        # 构造pkl文件模式
+        pkl_patterns = [
+            f"{currency_pair.lower()}_trained_model.pkl",
+            f"{currency_pair.upper()}_trained_model.pkl",
+            "*trained_model.pkl",
+            "*.pkl"
+        ]
+        
+        removed_files = []
+        for pattern in pkl_patterns:
+            pkl_files = glob.glob(os.path.join(backtest_dir, pattern))
+            for pkl_file in pkl_files:
+                if os.path.exists(pkl_file):
+                    try:
+                        os.remove(pkl_file)
+                        removed_files.append(pkl_file)
+                        logger.info(f"已删除旧的模型文件: {pkl_file}")
+                    except Exception as e:
+                        logger.warning(f"删除文件 {pkl_file} 失败: {str(e)}")
+        
+        if removed_files:
+            logger.info(f"总共删除了 {len(removed_files)} 个旧模型文件")
+        else:
+            logger.info("未找到需要删除的旧模型文件")
+            
+        return True
+    except Exception as e:
+        logger.error(f"删除旧模型文件时出错: {str(e)}")
+        return False
 
 def train_single_model(currency_pair, backtest_file_path):
     """
@@ -40,6 +80,11 @@ def train_single_model(currency_pair, backtest_file_path):
         
         # 获取货币对目录
         backtest_dir = os.path.dirname(backtest_file_path)
+        
+        # 删除现有的pkl文件
+        logger.info(f"正在清理 {currency_pair} 的旧模型文件...")
+        if not remove_existing_pkl_files(currency_pair, backtest_dir):
+            logger.warning(f"清理 {currency_pair} 旧模型文件失败，将继续训练...")
         
         # 构造训练文件路径
         training_file_name = f"{currency_pair.upper()}_模型训练.py"

@@ -347,10 +347,53 @@ class FeatureEngineer:
             # 添加反转点特征
             df_with_all_features = self.session_analyzer.detect_reversal_points(df_with_k_features)
             
+            # 添加信号一致性特征
+            df_with_all_features = self._add_signal_consistency_features(df_with_all_features)
+            
             return df_with_all_features
             
         except Exception as e:
             logger.error(f"生成特征异常: {str(e)}")
+            return df
+    
+    def _add_signal_consistency_features(self, df):
+        """
+        添加信号一致性特征
+        
+        Args:
+            df (DataFrame): 原始数据
+            
+        Returns:
+            DataFrame: 添加信号一致性特征后的数据
+        """
+        try:
+            df = df.copy()
+            
+            # 计算均线方向特征
+            df['sma_5_direction'] = np.sign(df['sma_5'].diff())
+            df['sma_10_direction'] = np.sign(df['sma_10'].diff())
+            df['sma_20_direction'] = np.sign(df['sma_20'].diff())
+            
+            # RSI方向特征
+            df['rsi_direction'] = np.sign(df['rsi'].diff())
+            
+            # 添加均线方向一致性特征
+            # 当短期、中期、长期均线方向一致时，趋势更可靠
+            df['ma_direction_consistency'] = (
+                (np.sign(df['sma_5'] - df['sma_10']) == np.sign(df['sma_10'] - df['sma_20'])).astype(int) *
+                (np.sign(df['sma_5'].diff()) == np.sign(df['sma_10'].diff())).astype(int) *
+                (np.sign(df['sma_10'].diff()) == np.sign(df['sma_20'].diff())).astype(int)
+            )
+            
+            # RSI与价格方向一致性特征
+            # 当RSI与价格方向一致时，趋势更强
+            df['rsi_price_consistency'] = (
+                (np.sign(df['close'].diff()) == np.sign(df['rsi'].diff())).astype(int)
+            )
+            
+            return df
+        except Exception as e:
+            logger.error(f"添加信号一致性特征异常: {str(e)}")
             return df
 
 
@@ -418,7 +461,10 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的信号一致性特征
+                'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
             
             # 创建目标变量（未来1小时的价格变动方向）
@@ -468,10 +514,15 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的信号一致性特征
+                'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
             
             X = df[feature_columns]
+            # 删除包含NaN的行，确保不会在预测时使用不完整的数据
+            X = X.dropna()
             return X
             
         except Exception as e:

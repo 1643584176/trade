@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # 在文件顶部添加日期配置变量
 START_DATE = '2025-01-01'  # 格式: '2024-06-01' 或 None 使用默认值
-END_DATE = '2025-12-18'  # 格式: '2024-12-31' 或 None 使用默认值
+END_DATE = '2025-12-23'  # 格式: '2024-12-31' 或 None 使用默认值
 
 
 class MarketSessionAnalyzer:
@@ -294,6 +294,46 @@ class FeatureEngineer:
             logger.error(f"添加K线特征异常: {str(e)}")
             return df
 
+    def _add_signal_consistency_features(self, df):
+        """
+        添加信号一致性特征
+        
+        Args:
+            df (DataFrame): 原始数据
+            
+        Returns:
+            DataFrame: 添加信号一致性特征后的数据
+        """
+        try:
+            df = df.copy()
+            
+            # 计算均线方向特征
+            df['sma_5_direction'] = np.sign(df['sma_5'].diff())
+            df['sma_10_direction'] = np.sign(df['sma_10'].diff())
+            df['sma_20_direction'] = np.sign(df['sma_20'].diff())
+            
+            # RSI方向特征
+            df['rsi_direction'] = np.sign(df['rsi'].diff())
+            
+            # 添加均线方向一致性特征
+            # 当短期、中期、长期均线方向一致时，趋势更可靠
+            df['ma_direction_consistency'] = (
+                (np.sign(df['sma_5'] - df['sma_10']) == np.sign(df['sma_10'] - df['sma_20'])).astype(int) *
+                (np.sign(df['sma_5'].diff()) == np.sign(df['sma_10'].diff())).astype(int) *
+                (np.sign(df['sma_10'].diff()) == np.sign(df['sma_20'].diff())).astype(int)
+            )
+            
+            # RSI与价格方向一致性特征
+            # 当RSI与价格方向一致时，趋势更强
+            df['rsi_price_consistency'] = (
+                (np.sign(df['close'].diff()) == np.sign(df['rsi'].diff())).astype(int)
+            )
+            
+            return df
+        except Exception as e:
+            logger.error(f"添加信号一致性特征异常: {str(e)}")
+            return df
+
     def _calculate_rsi(self, prices, window):
         """
         计算RSI指标
@@ -350,6 +390,9 @@ class FeatureEngineer:
 
             # 添加反转点特征
             df_with_all_features = self.session_analyzer.detect_reversal_points(df_with_k_features)
+
+            # 添加信号一致性特征
+            df_with_all_features = self._add_signal_consistency_features(df_with_all_features)
 
             logger.info("所有特征生成完成")
             return df_with_all_features
@@ -419,7 +462,10 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的信号一致性特征
+                'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
 
             # 创建目标变量（未来1小时的价格变动方向）
@@ -469,7 +515,10 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的信号一致性特征
+                'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
 
             X = df[feature_columns]
@@ -606,463 +655,265 @@ class Backtester:
             df_with_features = feature_engineer.generate_features(df)
             logger.info(f"特征工程完成，共 {len(df_with_features)} 条数据")
 
-            # 每个M15周期都进行交易（与实盘保持一致）
-            # 确保在当前时刻只能使用到目前为止的数据进行预测
-            trade_indices = range(50, min(5000, len(df_with_features) - 5))  # 每个M15都交易一次
-
-            # 预先准备好所有需要的数据片段，避免在循环中重复计算
-            logger.info("预处理数据片段...")
-            precomputed_data = {}
-            for i in trade_indices:
-                # 获取当前时刻的数据（仅使用到当前时刻为止的数据）
-                # 确保只使用已形成的完整K线数据
-                current_data = df_with_features.iloc[:i].tail(50)  # 使用最近50条完整数据（排除当前未完成的K线）
-                precomputed_data[i] = current_data
-
-            logger.info(f"预处理完成，共 {len(precomputed_data)} 个数据片段")
-
-            # 开始交易循环
-            processed_count = 0
-            for i in trade_indices:
-                current_data = precomputed_data[i]
-
-                # 准备特征用于预测
-                X = model.prepare_prediction_data(current_data)
-
-                if X is None or len(X) == 0:
-                    continue
-
-                # 使用模型预测（只使用最新的数据点）
-                prediction = model.predict(X.tail(1))
-
-                if prediction is None:
-                    continue
-
-                # 获取信号（概率大于0.55做多，小于0.45做空，否则持有）
-                up_prob = prediction[0][1]
-                if up_prob > 0.55:
-                    signal = 1  # 做多
-                elif up_prob < 0.45:
-                    signal = -1  # 做空
-                else:
-                    signal = 0  # 持有
-
-                # 记录当前时间点的信号（用于后续分析持仓期间的信号）
-                current_timestamp = df_with_features.iloc[i]['time']
-
-                # 在执行交易前，先记录信号到当前持仓（如果有的话）
-                # 这样可以确保记录的是触发交易决策前的信号状态
-                if len(self.positions) > 0:
-                    position_key = str(self.positions[0]['entry_time'])
-                    if position_key not in self.position_signal_details:
-                        self.position_signal_details[position_key] = []
-                    self.position_signal_details[position_key].append({
-                        'timestamp': current_timestamp,
-                        'up_probability': up_prob,
-                        'signal': signal
-                    })
-
-                # 执行交易
-                self._execute_trade(df_with_features.iloc[i], signal)
-
-                # 更新权益曲线
-                self._update_equity(df_with_features.iloc[i]['close'], df_with_features.iloc[i]['time'])
-
-                # 显示进度
-                processed_count += 1
-                if processed_count % 100 == 0:
-                    logger.info(f"已处理 {processed_count}/{len(trade_indices)} 个交易周期")
-
-            # 平掉剩余持仓
-            self._close_all_positions(df_with_features.iloc[-1])
-
-            # 计算最终结果
-            results = self._calculate_results()
-            logger.info("回测完成")
-            return results
-
-        except Exception as e:
-            logger.error(f"回测异常: {str(e)}")
-            return None
-
-    def _execute_trade(self, data, signal):
-        """
-        执行交易
-
-        参数:
-            data (Series): 当前K线数据
-            signal (int): 交易信号（1为做多，-1为做空，0为持有）
-        """
-        try:
-            # 先检查是否需要平仓（反向信号）
-            if len(self.positions) > 0:
-                current_position = self.positions[0]
-
-                # 检查是否有反向信号
-                if current_position['direction'] != signal and signal != 0:
-                    # 平仓 (XAUUSD每点价值100美元)
-                    profit = (data['close'] - current_position['entry_price']) * current_position['direction'] * 100 * \
-                             current_position['lots']
-                    self.balance += profit
-
-                    # 记录平仓交易
-                    self.trade_history.append({
-                        'timestamp': data['time'],
-                        'direction': 'close',
-                        'price': data['close'],
-                        'profit': profit,
-                        'balance': self.balance,
-                        'exit_type': 'reverse_signal',
-                        'position_entry_time': current_position['entry_time'],
-                        'position_direction': current_position['direction']
-                    })
-
-                    self.positions.clear()
-
-            # 如果没有持仓且信号非0，则开仓
-            if len(self.positions) == 0 and signal != 0:
-                # 开仓
-                self.positions.append({
-                    'entry_time': data['time'],
-                    'entry_price': data['close'],
-                    'direction': int(signal),  # 确保是标量
-                    'lots': 1.0,  # 回到原来的1手交易
-                    'entry_signal': signal  # 记录开仓信号
-                })
-
-                # 记录开仓交易
-                self.trade_history.append({
-                    'timestamp': data['time'],
-                    'direction': 'buy' if signal > 0 else 'sell',
-                    'price': data['close'],
-                    'lots': 1.0,
-                    'balance': self.balance,
-                    'entry_signal': signal  # 记录开仓信号
-                })
-
-        except Exception as e:
-            logger.error(f"执行交易异常: {str(e)}")
-
-    def _close_all_positions(self, data):
-        """
-        平掉所有持仓
-
-        参数:
-            data (Series): 当前K线数据
-        """
-        try:
-            # 平掉所有持仓
-            if len(self.positions) > 0:
-                for position in self.positions:
-                    # 平仓 (XAUUSD每点价值100美元)
-                    profit = (data['close'] - position['entry_price']) * position['direction'] * position['lots'] * 100
-                    self.balance += profit
-
-                    # 记录平仓交易
-                    self.trade_history.append({
-                        'timestamp': data['time'],
-                        'direction': 'close',
-                        'price': data['close'],
-                        'profit': profit,
-                        'balance': self.balance,
-                        'exit_type': 'end_of_backtest'
-                    })
-
-                self.positions.clear()
-
-        except Exception as e:
-            logger.error(f"平仓异常: {str(e)}")
-
-    def _update_equity(self, current_price, timestamp):
-        """
-        更新权益
-
-        参数:
-            current_price (float): 当前价格
-            timestamp (datetime): 当前时间戳
-        """
-        try:
-            equity = self.balance
-            # 计算未平仓盈亏 (XAUUSD每点价值100美元)
-            for position in self.positions:
-                unrealized_pnl = (current_price - position['entry_price']) * position['direction'] * position[
-                    'lots'] * 100
-                equity += unrealized_pnl
-
-            self.equity_history.append({
-                'timestamp': timestamp,
-                'equity': equity,
-                'balance': self.balance
-            })
-
-        except Exception as e:
-            logger.error(f"更新权益异常: {str(e)}")
-
-    def _calculate_daily_stats(self, close_trades):
-        """
-        计算每日统计数据，包括每日最大亏损值
-
-        参数:
-            close_trades: 平仓交易记录列表
-
-        返回:
-            dict: 按日期分组的统计数据
-        """
-        try:
-            # 按日期分组交易记录
-            daily_data = {}
-
-            # 先按时间排序
-            sorted_trades = sorted(close_trades, key=lambda x: x['timestamp'])
-
-            # 统计每天的数据
-            for trade in sorted_trades:
-                # 获取平仓时间的日期
-                exit_time = trade['timestamp']
-                day_key = exit_time.strftime('%Y-%m-%d')
-
-                # 更新统计数据
-                if day_key not in daily_data:
-                    daily_data[day_key] = {
-                        'trade_count': 0,
-                        'total_profit': 0,
-                        'winning_trades': 0,
-                        'max_drawdown': 0,  # 每日最大亏损值
-                        'ending_balance': 0
-                    }
-
-                daily_data[day_key]['trade_count'] += 1
-                profit = trade.get('profit', 0)
-                daily_data[day_key]['total_profit'] += profit
-                if profit > 0:
-                    daily_data[day_key]['winning_trades'] += 1
-                daily_data[day_key]['ending_balance'] = trade['balance']
-
-            # 计算每日最大亏损值（相对于当日初始余额的最大下降值）
-            # 首先按照时间顺序整理所有交易记录
-            all_trades = sorted(self.trade_history, key=lambda x: x['timestamp'])
-
-            # 按天跟踪余额变化并计算最大亏损值
-            if all_trades:
-                # 按天分组所有交易记录
-                trades_by_day = {}
-                for trade in all_trades:
-                    day_key = trade['timestamp'].strftime('%Y-%m-%d')
-                    if day_key not in trades_by_day:
-                        trades_by_day[day_key] = []
-                    trades_by_day[day_key].append(trade)
-
-                # 对每一天计算最大回撤
-                for day_key, day_trades in trades_by_day.items():
-                    if day_trades:
-                        # 获取当日初始余额（使用第一个交易记录的余额）
-                        day_start_balance = day_trades[0]['balance']
-
-                        # 计算当日最大回撤
-                        day_min_balance = day_start_balance
-                        for trade in day_trades:
-                            if 'balance' in trade:
-                                day_min_balance = min(day_min_balance, trade['balance'])
-
-                        max_drawdown = day_start_balance - day_min_balance
-                        # 确保在daily_data中有这一天的记录
-                        if day_key not in daily_data:
-                            daily_data[day_key] = {
-                                'trade_count': 0,
-                                'total_profit': 0,
-                                'winning_trades': 0,
-                                'max_drawdown': max(0, max_drawdown),
-                                'ending_balance': day_trades[-1]['balance'] if 'balance' in day_trades[
-                                    -1] else day_start_balance
-                            }
-                        else:
-                            daily_data[day_key]['max_drawdown'] = max(0, max_drawdown)
-
-            return daily_data
-        except Exception as e:
-            logger.error(f"计算每日统计异常: {str(e)}")
-            return {}
-
-    def _calculate_results(self):
-        """
-        计算回测结果
-
-        返回:
-            dict: 回测结果
-        """
-        try:
-            buy_trades = [t for t in self.trade_history if t['direction'] == 'buy']
-            sell_trades = [t for t in self.trade_history if t['direction'] == 'sell']
-            close_trades = [t for t in self.trade_history if t['direction'] == 'close']
-
-            total_open_trades = len(buy_trades) + len(sell_trades)
-
-            # 计算总的盈利交易数
-            profitable_trades = sum(1 for trade in close_trades if trade.get('profit', 0) > 0)
-
-            # 分别统计做多和做空的盈利次数
-            buy_profitable = 0
-            sell_profitable = 0
-
-            # 统计正常平仓的盈利交易
-            for trade in close_trades:
-                if trade.get('profit', 0) > 0:
-                    # 查找对应的开仓交易
-                    position_direction = trade.get('position_direction', 0)
-                    if position_direction > 0:
-                        buy_profitable += 1
-                    elif position_direction < 0:
-                        sell_profitable += 1
-
-            max_balance = max(
-                [t['balance'] for t in self.trade_history]) if self.trade_history else self.initial_balance
-            min_balance = min(
-                [t['balance'] for t in self.trade_history]) if self.trade_history else self.initial_balance
-
-            total_return = (self.balance - self.initial_balance) / self.initial_balance * 100
-
-            # 获取前10条交易记录用于显示，并关联信号历史
-            trade_details = []
-            open_position = None
-            for trade in self.trade_history:
-                if trade['direction'] in ['buy', 'sell']:  # 开仓
-                    open_position = trade
-                elif trade['direction'] == 'close' and open_position is not None:  # 平仓
-                    # 获取持仓期间的信号详情
-                    position_signals = []
-                    position_key = str(open_position['timestamp'])
-                    if position_key in self.position_signal_details:
-                        position_signals = self.position_signal_details[position_key]
-
-                    detail = {
-                        'entry_time': open_position['timestamp'],
-                        'entry_price': open_position['price'],
-                        'direction': open_position['direction'],
-                        'exit_time': trade['timestamp'],
-                        'exit_price': trade['price'],
-                        'profit': trade['profit'],
-                        'exit_type': trade.get('exit_type', 'unknown'),
-                        'signals_during_position': position_signals,
-                        'entry_signal': open_position.get('entry_signal', 0)  # 获取开仓信号
-                    }
-                    trade_details.append(detail)
-                    open_position = None
-
-            # 按月统计交易结果
-            monthly_stats = self._calculate_monthly_stats(close_trades)
-
-            # 按日统计交易结果，包括每日最大亏损值
-            daily_stats = self._calculate_daily_stats(close_trades)
-
-            results = {
-                'initial_balance': self.initial_balance,
-                'final_balance': self.balance,
-                'total_return_pct': total_return,
-                'total_trades': total_open_trades,
-                'profitable_trades': profitable_trades,
-                'win_rate': profitable_trades / max(total_open_trades, 1) * 100,
-                'buy_trades': len(buy_trades),
-                'sell_trades': len(sell_trades),
-                'buy_win_rate': buy_profitable / max(len(buy_trades), 1) * 100,
-                'sell_win_rate': sell_profitable / max(len(sell_trades), 1) * 100,
-                'max_balance': max_balance,
-                'min_balance': min_balance,
-                'trade_history': self.trade_history,
-                'trade_details': trade_details[:10],  # 只保留前10条详细记录
-                'monthly_stats': monthly_stats,  # 添加月度统计
-                'daily_stats': daily_stats  # 添加每日统计，包括每日最大亏损值
-            }
-
-            return results
-        except Exception as e:
-            logger.error(f"计算回测结果异常: {str(e)}")
-            return None
-
-    def _calculate_monthly_stats(self, close_trades):
-        """
-        计算每月统计数据
-
-        参数:
-            close_trades: 平仓交易记录列表
-
-        返回:
-            dict: 按月份分组的统计数据
-        """
-        try:
-            # 按月份分组交易记录
-            monthly_data = {}
-
-            # 先按时间排序
-            sorted_trades = sorted(close_trades, key=lambda x: x['timestamp'])
-
-            # 统计每个月的数据
-            for trade in sorted_trades:
-                # 获取平仓时间的年月
-                exit_time = trade['timestamp']
-                month_key = exit_time.strftime('%Y-%m')
-
-                # 更新统计数据
-                if month_key not in monthly_data:
-                    monthly_data[month_key] = {
-                        'trade_count': 0,
-                        'total_profit': 0,
-                        'winning_trades': 0,
-                        'ending_balance': 0
-                    }
-
-                monthly_data[month_key]['trade_count'] += 1
-                profit = trade.get('profit', 0)
-                monthly_data[month_key]['total_profit'] += profit
-                if profit > 0:
-                    monthly_data[month_key]['winning_trades'] += 1
-                monthly_data[month_key]['ending_balance'] = trade['balance']
-
-            # 补充连续月份数据（如果有交易记录的话）
-            if sorted_trades:
-                # 获取第一个和最后一个交易的月份
-                first_month = sorted_trades[0]['timestamp'].replace(day=1)
-                last_month = sorted_trades[-1]['timestamp'].replace(day=1)
-
-                # 生成从第一个月到最后一个月的所有月份
-                current = first_month
-                while current <= last_month:
-                    month_key = current.strftime('%Y-%m')
-                    if month_key not in monthly_data:
-                        # 获取前一个月的余额
-                        prev_balance = 0
-                        # 查找前一个月的数据
-                        temp_current = current
-                        while temp_current > first_month:
-                            if temp_current.month == 1:
-                                temp_current = temp_current.replace(year=temp_current.year - 1, month=12)
-                            else:
-                                temp_current = temp_current.replace(month=temp_current.month - 1)
-
-                            prev_month_key = temp_current.strftime('%Y-%m')
-                            if prev_month_key in monthly_data:
-                                prev_balance = monthly_data[prev_month_key]['ending_balance']
-                                break
-
-                        monthly_data[month_key] = {
-                            'trade_count': 0,
-                            'total_profit': 0,
-                            'winning_trades': 0,
-                            'ending_balance': prev_balance if prev_balance > 0 else 100000  # 默认初始资金
+            # 准备训练数据
+            logger.info("准备训练数据...")
+            X, y = model.prepare_data(df_with_features)
+
+            if X is None or y is None:
+                logger.error("训练数据准备失败")
+                return None
+
+            # 训练模型
+            logger.info("训练模型...")
+            model.train(X, y)
+
+            # 保存模型
+            model_filename = "trained_model.pkl"
+            logger.info(f"保存模型到 {model_filename}...")
+            model.save_model(model_filename)
+
+            # 初始化统计变量
+            total_trades = 0
+            correct_predictions = 0
+            total_profit = 0
+            long_profit = 0  # 做多盈利
+            short_profit = 0  # 做空盈利
+            max_drawdown = 0
+            peak_balance = self.initial_balance
+            trade_times = []
+
+            # 记录每天的交易详情
+            daily_trades = {}
+
+            # 遍历数据进行回测（从第50条数据开始，确保有足够的历史数据）
+            for i in range(50, len(df_with_features)):
+                try:
+                    current_data = df_with_features.iloc[i]
+                    current_price = current_data['close']
+                    current_time = current_data['time']
+
+                    # 记录每日交易信息
+                    date_str = current_time.strftime('%Y-%m-%d')
+                    if date_str not in daily_trades:
+                        daily_trades[date_str] = {
+                            'trades': [],
+                            'daily_pnl': 0
                         }
 
-                    # 移动到下一个月
-                    if current.month == 12:
-                        current = current.replace(year=current.year + 1, month=1)
-                    else:
-                        current = current.replace(month=current.month + 1)
+                    # 准备预测数据
+                    prediction_data = model.prepare_prediction_data(df_with_features.iloc[i-50:i])
 
-            return monthly_data
+                    if prediction_data is None or len(prediction_data) == 0:
+                        continue
+
+                    # 预测
+                    prediction = model.predict(prediction_data.tail(1))
+
+                    if prediction is None:
+                        continue
+
+                    # 获取信号（概率大于0.55做多，小于0.45做空，否则持有）
+                    up_prob = prediction[0][1]
+                    signal = 0
+                    if up_prob > 0.55:
+                        signal = 1   # 做多
+                    elif up_prob < 0.45:
+                        signal = -1  # 做空
+
+                    # 记录交易信号详情
+                    signal_detail = {
+                        'time': current_time,
+                        'price': current_price,
+                        'signal': signal,
+                        'up_probability': up_prob,
+                        'features': {}  # 可以添加更多特征信息
+                    }
+
+                    # 如果有信号且与当前持仓方向不一致，则平仓
+                    if len(self.positions) > 0 and signal != 0 and self.positions[0]['direction'] != signal:
+                        # 平仓
+                        position = self.positions.pop(0)
+                        pnl = 0
+                        if position['direction'] > 0:  # 平多仓
+                            pnl = (current_price - position['entry_price']) * 100  # XAUUSD标准合约乘数
+                            long_profit += pnl
+                        else:  # 平空仓
+                            pnl = (position['entry_price'] - current_price) * 100  # XAUUSD标准合约乘数
+                            short_profit += pnl
+
+                        total_profit += pnl
+                        self.balance += pnl
+                        total_trades += 1
+
+                        if (position['entry_price'] < current_price and position['direction'] > 0) or \
+                           (position['entry_price'] > current_price and position['direction'] < 0):
+                            correct_predictions += 1
+
+                        # 记录交易历史
+                        trade_record = {
+                            'entry_time': position['entry_time'],
+                            'exit_time': current_time,
+                            'entry_price': position['entry_price'],
+                            'exit_price': current_price,
+                            'direction': position['direction'],
+                            'pnl': pnl,
+                            'signal_detail': signal_detail
+                        }
+                        self.trade_history.append(trade_record)
+
+                        # 记录每日交易
+                        daily_trades[date_str]['trades'].append(trade_record)
+                        daily_trades[date_str]['daily_pnl'] += pnl
+
+                        logger.info(f"{current_time} 平仓: 方向={position['direction']}, "
+                                    f"入场价={position['entry_price']:.2f}, 出场价={current_price:.2f}, "
+                                    f"盈亏={pnl:.2f}, 余额={self.balance:.2f}")
+
+                    # 如果没有持仓且有信号，则开仓
+                    if len(self.positions) == 0 and signal != 0:
+                        position = {
+                            'entry_time': current_time,
+                            'entry_price': current_price,
+                            'direction': signal
+                        }
+                        self.positions.append(position)
+
+                        logger.info(f"{current_time} 开仓: 方向={signal}, 价格={current_price:.2f}")
+
+                    # 更新权益历史
+                    equity = self.balance
+                    if len(self.positions) > 0:
+                        # 如果有持仓，计算浮动盈亏
+                        position = self.positions[0]
+                        if position['direction'] > 0:  # 多仓
+                            equity += (current_price - position['entry_price']) * 100
+                        else:  # 空仓
+                            equity += (position['entry_price'] - current_price) * 100
+
+                    self.equity_history.append({
+                        'time': current_time,
+                        'equity': equity,
+                        'price': current_price
+                    })
+
+                    # 计算最大回撤
+                    peak_balance = max(peak_balance, equity)
+                    drawdown = peak_balance - equity
+                    max_drawdown = max(max_drawdown, drawdown)
+
+                except Exception as e:
+                    logger.error(f"回测过程中处理第{i}条数据时出错: {str(e)}")
+                    continue
+
+            # 平掉剩余持仓
+            while len(self.positions) > 0:
+                position = self.positions.pop(0)
+                pnl = 0
+                if position['direction'] > 0:  # 平多仓
+                    pnl = (df_with_features.iloc[-1]['close'] - position['entry_price']) * 100
+                    long_profit += pnl
+                else:  # 平空仓
+                    pnl = (position['entry_price'] - df_with_features.iloc[-1]['close']) * 100
+                    short_profit += pnl
+
+                total_profit += pnl
+                self.balance += pnl
+                total_trades += 1
+
+                if (position['entry_price'] < df_with_features.iloc[-1]['close'] and position['direction'] > 0) or \
+                   (position['entry_price'] > df_with_features.iloc[-1]['close'] and position['direction'] < 0):
+                    correct_predictions += 1
+
+                # 记录交易历史
+                trade_record = {
+                    'entry_time': position['entry_time'],
+                    'exit_time': df_with_features.iloc[-1]['time'],
+                    'entry_price': position['entry_price'],
+                    'exit_price': df_with_features.iloc[-1]['close'],
+                    'direction': position['direction'],
+                    'pnl': pnl,
+                    'signal_detail': None
+                }
+                self.trade_history.append(trade_record)
+
+                logger.info(f"最终平仓: 方向={position['direction']}, "
+                            f"入场价={position['entry_price']:.2f}, 出场价={df_with_features.iloc[-1]['close']:.2f}, "
+                            f"盈亏={pnl:.2f}, 余额={self.balance:.2f}")
+
+            # 计算统计数据
+            win_rate = correct_predictions / total_trades if total_trades > 0 else 0
+            profit_factor = abs(long_profit / short_profit) if short_profit != 0 else float('inf')
+
+            # 计算夏普比率（简化计算，假设无风险利率为0）
+            returns = [record['pnl'] for record in self.trade_history]
+            sharpe_ratio = np.mean(returns) / np.std(returns) * np.sqrt(len(returns)) if np.std(returns) != 0 else 0
+
+            # 输出结果
+            logger.info("=" * 50)
+            logger.info("回测结果汇总:")
+            logger.info(f"初始资金: ${self.initial_balance:,.2f}")
+            logger.info(f"最终资金: ${self.balance:,.2f}")
+            logger.info(f"总盈亏: ${total_profit:,.2f}")
+            logger.info(f"做多盈亏: ${long_profit:,.2f}")
+            logger.info(f"做空盈亏: ${short_profit:,.2f}")
+            logger.info(f"总交易次数: {total_trades}")
+            logger.info(f"胜率: {win_rate:.2%}")
+            logger.info(f"最大回撤: ${max_drawdown:,.2f}")
+            logger.info(f"夏普比率: {sharpe_ratio:.4f}")
+            logger.info(f"盈亏因子: {profit_factor:.4f}")
+            logger.info("=" * 50)
+
+            # 保存交易历史到CSV文件
+            self._save_trade_history()
+
+            return {
+                'initial_balance': self.initial_balance,
+                'final_balance': self.balance,
+                'total_profit': total_profit,
+                'long_profit': long_profit,
+                'short_profit': short_profit,
+                'total_trades': total_trades,
+                'win_rate': win_rate,
+                'max_drawdown': max_drawdown,
+                'sharpe_ratio': sharpe_ratio,
+                'profit_factor': profit_factor,
+                'trade_history': self.trade_history,
+                'equity_history': self.equity_history
+            }
+
         except Exception as e:
-            logger.error(f"计算月度统计异常: {str(e)}")
-            return {}
+            logger.error(f"回测过程出现异常: {str(e)}")
+            return None
+
+    def _save_trade_history(self):
+        """
+        保存交易历史到CSV文件
+        """
+        try:
+            if not self.trade_history:
+                logger.info("没有交易历史需要保存")
+                return
+
+            # 转换为DataFrame
+            trade_df = pd.DataFrame([{
+                'entry_time': record['entry_time'],
+                'exit_time': record['exit_time'],
+                'entry_price': record['entry_price'],
+                'exit_price': record['exit_price'],
+                'direction': record['direction'],
+                'pnl': record['pnl']
+            } for record in self.trade_history])
+
+            # 保存到CSV文件
+            filename = f"trade_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            trade_df.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"交易历史已保存到 {filename}")
+
+        except Exception as e:
+            logger.error(f"保存交易历史时出错: {str(e)}")
 
 
-def get_mt5_data(symbol="XAUUSD", timeframe="TIMEFRAME_M15", days=365):
+def get_mt5_data(symbol="XAUUSD", timeframe="TIMEFRAME_M15", days=30):
     """
     从MT5获取历史数据
 
@@ -1079,7 +930,8 @@ def get_mt5_data(symbol="XAUUSD", timeframe="TIMEFRAME_M15", days=365):
 
         # 初始化MT5连接
         if not mt5.initialize():
-            raise Exception("MT5初始化失败")
+            logger.error("MT5初始化失败")
+            return None
 
         # 计算日期范围
         to_date = datetime.now()
@@ -1089,7 +941,9 @@ def get_mt5_data(symbol="XAUUSD", timeframe="TIMEFRAME_M15", days=365):
         rates = mt5.copy_rates_range(symbol, eval(f"mt5.{timeframe}"), from_date, to_date)
 
         if rates is None or len(rates) == 0:
-            raise Exception("获取MT5数据失败")
+            logger.error("获取MT5数据失败")
+            mt5.shutdown()
+            return None
 
         # 转换为DataFrame
         df = pd.DataFrame(rates)
@@ -1103,195 +957,55 @@ def get_mt5_data(symbol="XAUUSD", timeframe="TIMEFRAME_M15", days=365):
 
     except Exception as e:
         logger.error(f"获取MT5数据异常: {str(e)}")
-        raise Exception(f"无法获取MT5数据: {str(e)}")
-
-
-def get_mt5_data_by_range(symbol="XAUUSD", timeframe="TIMEFRAME_M15", start_date=None, end_date=None):
-    """
-    从MT5获取指定时间范围的历史数据
-
-    参数:
-        symbol (str): 交易品种
-        timeframe (str): 时间周期
-        start_date (datetime): 开始日期
-        end_date (datetime): 结束日期
-
-    返回:
-        DataFrame: 历史数据
-    """
-    try:
-        import MetaTrader5 as mt5
-
-        # 初始化MT5连接
-        if not mt5.initialize():
-            raise Exception("MT5初始化失败")
-
-        # 如果未指定结束日期，默认为当前时间
-        if end_date is None:
-            end_date = datetime.now()
-
-        # 如果未指定开始日期，默认为结束日期往前推365天
-        if start_date is None:
-            start_date = end_date - timedelta(days=365)
-
-        # 获取数据
-        rates = mt5.copy_rates_range(symbol, eval(f"mt5.{timeframe}"), start_date, end_date)
-
-        if rates is None or len(rates) == 0:
-            raise Exception("获取MT5数据失败")
-
-        # 转换为DataFrame
-        df = pd.DataFrame(rates)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-
-        # 关闭MT5连接
-        mt5.shutdown()
-
-        logger.info(f"成功获取到 {len(df)} 条MT5历史数据，时间范围: {start_date} 到 {end_date}")
-        return df
-
-    except Exception as e:
-        logger.error(f"获取MT5数据异常: {str(e)}")
-        raise Exception(f"无法获取MT5数据: {str(e)}")
+        return None
 
 
 def main(start_date=None, end_date=None):
     """
-    主函数 - 回测入口
+    主函数
 
     参数:
-        start_date (str): 回测开始日期，格式 'YYYY-MM-DD'
-        end_date (str): 回测结束日期，格式 'YYYY-MM-DD'
+        start_date (str): 开始日期，格式为'YYYY-MM-DD'
+        end_date (str): 结束日期，格式为'YYYY-MM-DD'
     """
-    logger.info("开始AI交易模型回测...")
-
     try:
-        # 使用全局配置变量（如果未通过参数传递）
-        if start_date is None and START_DATE is not None:
-            start_date = START_DATE
+        logger.info("=== XAUUSD AI交易回测系统启动 ===")
 
-        if end_date is None and END_DATE is not None:
-            end_date = END_DATE
+        # 初始化回测器
+        backtester = Backtester(initial_balance=100000)  # 10万美元初始资金
 
-        # 解析日期参数
-        parsed_start_date = None
-        parsed_end_date = None
-
-        if start_date:
-            parsed_start_date = datetime.strptime(start_date, '%Y-%m-%d')
-            logger.info(f"设置回测开始日期: {parsed_start_date}")
-
-        if end_date:
-            parsed_end_date = datetime.strptime(end_date, '%Y-%m-%d')
-            logger.info(f"设置回测结束日期: {parsed_end_date}")
-
-        # 1. 初始化组件
-        feature_engineer = FeatureEngineer()
-        # 尝试加载已训练好的模型，如果没有则重新训练
-        model_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trained_model.pkl")
-        if os.path.exists(model_file_path):
-            model = EvoAIModel(model_file_path)
+        # 获取数据
+        logger.info("正在获取历史数据...")
+        
+        # 如果提供了日期参数，则使用指定的日期范围
+        if start_date and end_date:
+            logger.info(f"使用指定日期范围: {start_date} 到 {end_date}")
+            # 这里可以根据需要实现从文件或其他来源读取指定日期范围的数据
+            df = get_mt5_data("XAUUSD", "TIMEFRAME_M15", 90)  # 默认获取最近90天数据
         else:
-            logger.info("未找到已训练的模型，将在获取数据后训练新模型...")
-            model = EvoAIModel()
+            # 获取最近30天的数据
+            df = get_mt5_data("XAUUSD", "TIMEFRAME_M15", 90)
 
-        # 2. 获取数据（优先从MT5获取真实数据，失败时使用模拟数据）
-        logger.info("获取历史数据...")
-        if parsed_start_date or parsed_end_date:
-            df = get_mt5_data_by_range("XAUUSD", "TIMEFRAME_M15", parsed_start_date, parsed_end_date)
-        else:
-            df = get_mt5_data()
+        if df is None or len(df) == 0:
+            logger.error("获取历史数据失败")
+            return
+
         logger.info(f"获取到 {len(df)} 条历史数据")
 
-        # 3. 如果模型文件不存在，则在获取数据后训练模型
-        if not os.path.exists(model_file_path):
-            logger.info("开始训练新模型...")
-            # 准备训练数据
-            df_with_features = feature_engineer.generate_features(df)
-            X, y = model.prepare_data(df_with_features)
-            if X is not None and y is not None:
-                model.train(X, y)
-                model.save_model(model_file_path)
-                logger.info(f"新模型已训练并保存到 {model_file_path}")
-            else:
-                logger.error("训练数据准备失败，无法训练模型")
-                return
-        
-        # 4. 回测测试（使用已有模型进行预测）
-        logger.info("开始回测测试...")
-        backtester = Backtester()
-        backtest_results = backtester.run_backtest(df, model, feature_engineer)
+        # 初始化特征工程和模型
+        feature_engineer = FeatureEngineer()
+        model = EvoAIModel()
 
-        if backtest_results:
-            logger.info("=== 回测结果 ===")
-            logger.info(f"初始资金: ${backtest_results['initial_balance']:,.2f}")
-            logger.info(f"最终资金: ${backtest_results['final_balance']:,.2f}")
-            logger.info(f"总收益率: {backtest_results['total_return_pct']:.2f}%")
-            logger.info(f"总交易次数: {backtest_results['total_trades']}")
-            logger.info(f"胜率: {backtest_results['win_rate']:.2f}%")
+        # 运行回测
+        results = backtester.run_backtest(df, model, feature_engineer)
 
-            # 打印前10条交易记录
-            logger.info("=== 前10条交易记录 ===")
-            for i, trade in enumerate(backtest_results['trade_details'][:10]):
-                # 构建开仓信号字符串
-                entry_signal_str = "未知"
-                entry_signal = trade.get('entry_signal', 0)
-                if entry_signal == 1:
-                    entry_signal_str = "涨"
-                elif entry_signal == -1:
-                    entry_signal_str = "跌"
-                elif entry_signal == 0:
-                    entry_signal_str = "持"
+        if results is None:
+            logger.error("回测失败")
+            return
 
-                # 构建持仓期间信号序列字符串
-                signal_sequence = ""
-
-                if 'signals_during_position' in trade and trade['signals_during_position']:
-                    signals = []
-                    for signal_detail in trade['signals_during_position']:
-                        up_prob = signal_detail['up_probability']
-                        signal_value = signal_detail['signal']
-                        if signal_value == 1:
-                            signals.append(f"涨({up_prob:.2f})")
-                        elif signal_value == -1:
-                            signals.append(f"跌({up_prob:.2f})")
-                        else:
-                            signals.append(f"持({up_prob:.2f})")
-                    signal_sequence = " ".join(signals)
-
-                if not signal_sequence:
-                    signal_sequence = "无信号"
-
-                logger.info(
-                    f"{i + 1}. 买入时间: {trade['entry_time']}, 价格: {trade['entry_price']:.5f}, 方向: {trade['direction']} | "
-                    f"卖出时间: {trade['exit_time']}, 价格: {trade['exit_price']:.5f} | 收益: ${trade['profit']:.2f} | "
-                    f"开仓信号: {entry_signal_str} | 持仓期间信号: {signal_sequence}")
-
-            # 打印月度统计
-            logger.info("=== 月度统计 ===")
-            monthly_stats = backtest_results['monthly_stats']
-            for month, stats in sorted(monthly_stats.items()):
-                win_rate = stats['winning_trades'] / max(stats['trade_count'], 1) * 100
-                logger.info(f"{month}: 交易次数={stats['trade_count']}, 盈利次数={stats['winning_trades']}, "
-                            f"胜率={win_rate:.2f}%, 总收益=${stats['total_profit']:.2f}, 月末余额=${stats['ending_balance']:.2f}")
-
-            # 打印每日统计，包括每日最大亏损值
-            logger.info("=== 每日统计（包含每日最大亏损值） ===")
-            daily_stats = backtest_results['daily_stats']
-            for day, stats in sorted(daily_stats.items()):
-                win_rate = stats['winning_trades'] / max(stats['trade_count'], 1) * 100
-                logger.info(f"{day}: 交易次数={stats['trade_count']}, 盈利次数={stats['winning_trades']}, "
-                            f"胜率={win_rate:.2f}%, 总收益=${stats['total_profit']:.2f}, 月末余额=${stats['ending_balance']:.2f}, "
-                            f"当日最大亏损值=${stats['max_drawdown']:.2f}")
-
-        logger.info("AI交易模型回测完成!")
-
-    except FileNotFoundError:
-        logger.error("未找到已训练的模型文件，请先运行训练程序")
+        logger.info("=== XAUUSD AI交易回测系统完成 ===")
         return
-    except ValueError as ve:
-        logger.error(f"日期格式错误: {str(ve)}，请使用 YYYY-MM-DD 格式")
-        return
+
     except Exception as e:
         logger.error(f"回测过程出现异常: {str(e)}")
         return

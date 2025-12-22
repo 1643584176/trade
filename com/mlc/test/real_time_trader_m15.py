@@ -349,10 +349,53 @@ class FeatureEngineer:
             # 添加反转点特征
             df_with_all_features = self.session_analyzer.detect_reversal_points(df_with_k_features)
 
+            # 添加信号一致性特征
+            df_with_all_features = self._add_signal_consistency_features(df_with_all_features)
+
             return df_with_all_features
 
         except Exception as e:
             logger.error(f"生成特征异常: {str(e)}")
+            return df
+
+    def _add_signal_consistency_features(self, df):
+        """
+        添加信号一致性特征
+
+        Args:
+            df (DataFrame): 原始数据
+
+        Returns:
+            DataFrame: 添加信号一致性特征后的数据
+        """
+        try:
+            df = df.copy()
+
+            # 计算均线方向特征
+            df['sma_5_direction'] = np.sign(df['sma_5'].diff())
+            df['sma_10_direction'] = np.sign(df['sma_10'].diff())
+            df['sma_20_direction'] = np.sign(df['sma_20'].diff())
+
+            # RSI方向特征
+            df['rsi_direction'] = np.sign(df['rsi'].diff())
+
+            # 添加均线方向一致性特征
+            # 当短期、中期、长期均线方向一致时，趋势更可靠
+            df['ma_direction_consistency'] = (
+                (np.sign(df['sma_5'] - df['sma_10']) == np.sign(df['sma_10'] - df['sma_20'])).astype(int) *
+                (np.sign(df['sma_5'].diff()) == np.sign(df['sma_10'].diff())).astype(int) *
+                (np.sign(df['sma_10'].diff()) == np.sign(df['sma_20'].diff())).astype(int)
+            )
+
+            # RSI与价格方向一致性特征
+            # 当RSI与价格方向一致时，趋势更强
+            df['rsi_price_consistency'] = (
+                (np.sign(df['close'].diff()) == np.sign(df['rsi'].diff())).astype(int)
+            )
+
+            return df
+        except Exception as e:
+            logger.error(f"添加信号一致性特征异常: {str(e)}")
             return df
 
 
@@ -420,7 +463,10 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的信号一致性特征
+                'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
 
             # 创建目标变量（未来1小时的价格变动方向）
@@ -470,10 +516,21 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的信号一致性特征
+                'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
+            
+            # 检查是否存在训练时没有的特征
+            missing_features = set(feature_columns) - set(df.columns)
+            if missing_features:
+                logger.error(f"特征名称不匹配，缺少以下特征: {missing_features}")
+                return None
 
             X = df[feature_columns]
+            # 删除包含NaN的行，确保不会在预测时使用不完整的数据
+            X = X.dropna()
             return X
 
         except Exception as e:
@@ -697,28 +754,34 @@ class RealTimeTraderM15:
                 logger.info("特征数据为空，返回观望信号")
                 return 0
 
-            # 预测
-            prediction = self.model.predict(X.tail(1))  # 只使用最新的数据点
+            # 确保我们使用的是最后一行数据进行预测
+            if len(X) > 0:
+                # 预测
+                prediction = self.model.predict(X.iloc[[-1]])  # 只使用最新的数据点
 
-            if prediction is None:
-                logger.info("模型预测结果为空，返回观望信号")
-                return 0
+                if prediction is None:
+                    logger.info("模型预测结果为空，返回观望信号")
+                    return 0
 
-            # 根据预测概率确定信号
-            # 获取信号（概率大于0.55做多，小于0.45做空，否则持有）
-            up_prob = prediction[0][1]
+                # 根据预测概率确定信号
+                # 获取信号（概率大于0.55做多，小于0.45做空，否则持有）
+                up_prob = prediction[0][1]
 
-            logger.info(f"预测概率 - 上涨: {up_prob:.4f}, 下跌: {1 - up_prob:.4f}")
+                logger.info(f"预测概率 - 上涨: {up_prob:.4f}, 下跌: {1 - up_prob:.4f}")
 
-            if up_prob > 0.55:
-                logger.info("决策: 做多")
-                return 1  # 做多
-            elif up_prob < 0.45:
-                logger.info("决策: 做空")
-                return -1  # 做空
+                # 当上涨概率大于0.55时做多，小于0.45时做空，否则观望
+                if up_prob > 0.55:
+                    logger.info("决策: 做多")
+                    return 1   # 做多
+                elif up_prob < 0.45:
+                    logger.info("决策: 做空")
+                    return -1  # 做空
+                else:
+                    logger.info(f"决策: 观望 (概率区间0.45-0.55，当前概率: {up_prob:.4f})")
+                    return 0   # 观望
             else:
-                logger.info(f"决策: 观望 (概率区间0.45-0.55，当前概率: {up_prob:.4f})")
-                return 0  # 观望
+                logger.info("没有足够的有效数据进行预测，返回观望信号")
+                return 0
 
         except Exception as e:
             logger.error(f"做出交易决策异常: {str(e)}")

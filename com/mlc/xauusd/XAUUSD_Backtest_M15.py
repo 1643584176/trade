@@ -14,13 +14,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # 在文件顶部添加日期配置变量
-START_DATE = None   # 格式: '2024-06-01' 或 None 使用默认值
-END_DATE = None    # 格式: '2024-12-31' 或 None 使用默认值
+START_DATE = '2025-12-15'   # 格式: '2024-06-01' 或 None 使用默认值
+END_DATE = '2025-12-23'    # 格式: '2024-12-31' 或 None 使用默认值
 
 
 class MarketSessionAnalyzer:
     """
-    市场时段分析器，用于分析亚盘、欧盘、美盘特征以及反转点
+    市场时段分析器，用于分析亚盘、欧盘、美盘特征以及反转点sma_5_direction
     """
     
     def __init__(self):
@@ -293,6 +293,76 @@ class FeatureEngineer:
             logger.error(f"添加K线特征异常: {str(e)}")
             return df
     
+    def generate_features(self, df):
+        """
+        生成所有特征
+        
+        Args:
+            df (DataFrame): 原始数据
+            
+        Returns:
+            DataFrame: 包含所有特征的数据
+        """
+        try:
+            # 添加时间特征
+            df_with_time_features = self.add_time_features(df)
+            
+            # 添加K线特征
+            df_with_k_features = self.add_k_features(df_with_time_features)
+            
+            # 添加反转点特征
+            df_with_all_features = self.session_analyzer.detect_reversal_points(df_with_k_features)
+            
+            # 添加信号一致性特征
+            df_with_all_features = self._add_signal_consistency_features(df_with_all_features)
+            
+            logger.info("所有特征生成完成")
+            return df_with_all_features
+            
+        except Exception as e:
+            logger.error(f"生成特征异常: {str(e)}")
+            return df
+    
+    def _add_signal_consistency_features(self, df):
+        """
+        添加信号一致性特征
+        
+        Args:
+            df (DataFrame): 原始数据
+            
+        Returns:
+            DataFrame: 添加信号一致性特征后的数据
+        """
+        try:
+            df = df.copy()
+            
+            # 计算均线方向特征
+            df['sma_5_direction'] = np.sign(df['sma_5'].diff())
+            df['sma_10_direction'] = np.sign(df['sma_10'].diff())
+            df['sma_20_direction'] = np.sign(df['sma_20'].diff())
+            
+            # RSI方向特征
+            df['rsi_direction'] = np.sign(df['rsi'].diff())
+            
+            # 添加均线方向一致性特征
+            # 当短期、中期、长期均线方向一致时，趋势更可靠
+            df['ma_direction_consistency'] = (
+                (np.sign(df['sma_5'] - df['sma_10']) == np.sign(df['sma_10'] - df['sma_20'])).astype(int) *
+                (np.sign(df['sma_5'].diff()) == np.sign(df['sma_10'].diff())).astype(int) *
+                (np.sign(df['sma_10'].diff()) == np.sign(df['sma_20'].diff())).astype(int)
+            )
+            
+            # RSI与价格方向一致性特征
+            # 当RSI与价格方向一致时，趋势更强
+            df['rsi_price_consistency'] = (
+                (np.sign(df['close'].diff()) == np.sign(df['rsi'].diff())).astype(int)
+            )
+            
+            return df
+        except Exception as e:
+            logger.error(f"添加信号一致性特征异常: {str(e)}")
+            return df
+    
     def _calculate_rsi(self, prices, window):
         """
         计算RSI指标
@@ -329,33 +399,6 @@ class FeatureEngineer:
         macd = ema_fast - ema_slow
         macd_signal = macd.ewm(span=signal).mean()
         return macd, macd_signal
-    
-    def generate_features(self, df):
-        """
-        生成所有特征
-        
-        Args:
-            df (DataFrame): 原始数据
-            
-        Returns:
-            DataFrame: 包含所有特征的数据
-        """
-        try:
-            # 添加时间特征
-            df_with_time_features = self.add_time_features(df)
-            
-            # 添加K线特征
-            df_with_k_features = self.add_k_features(df_with_time_features)
-            
-            # 添加反转点特征
-            df_with_all_features = self.session_analyzer.detect_reversal_points(df_with_k_features)
-            
-            logger.info("所有特征生成完成")
-            return df_with_all_features
-            
-        except Exception as e:
-            logger.error(f"生成特征异常: {str(e)}")
-            return df
 
 
 class EvoAIModel:
@@ -369,6 +412,7 @@ class EvoAIModel:
         self.model = None
         self.performance_history = []
         self.generation = 0
+        self.accuracy_threshold = 0.5  # 准确率阈值，低于此值需要重新训练
         if model_file:
             self.load_model(model_file)
         else:
@@ -417,7 +461,10 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的信号一致性特征
+                'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
             
             # 创建目标变量（未来1小时的价格变动方向）
@@ -467,7 +514,10 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的信号一致性特征
+                'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
             
             X = df[feature_columns]
@@ -530,6 +580,49 @@ class EvoAIModel:
             logger.error(f"预测异常: {str(e)}")
             return None
     
+    def evaluate_performance(self, X, y):
+        """
+        评估模型性能
+        
+        Args:
+            X (DataFrame): 特征数据
+            y (Series): 真实标签
+            
+        Returns:
+            float: 准确率
+        """
+        try:
+            y_pred = self.model.predict(X)
+            accuracy = accuracy_score(y, y_pred)
+            return accuracy
+        except Exception as e:
+            logger.error(f"模型性能评估异常: {str(e)}")
+            return 0.0
+    
+    def needs_retraining(self, X, y):
+        """
+        判断模型是否需要重新训练
+        
+        Args:
+            X (DataFrame): 特征数据
+            y (Series): 真实标签
+            
+        Returns:
+            bool: 是否需要重新训练
+        """
+        try:
+            if len(y) < 10:  # 数据量太少不进行评估
+                return False
+                
+            accuracy = self.evaluate_performance(X, y)
+            logger.info(f"模型最近性能准确率: {accuracy:.4f}")
+            
+            # 如果准确率低于阈值，需要重新训练
+            return accuracy < self.accuracy_threshold
+        except Exception as e:
+            logger.error(f"判断模型是否需要重新训练时异常: {str(e)}")
+            return False
+    
     def save_model(self, filename):
         """
         保存模型
@@ -584,7 +677,9 @@ class Backtester:
         self.trade_history = []  # 交易历史
         self.equity_history = []  # 权益历史
         self.position_signal_details = {}  # 记录每个仓位的信号详情
-
+        self.recent_accuracy = 0.5  # 最近的预测准确率
+        self.signal_history = []  # 信号历史记录，用于评估模型性能
+    
     def run_backtest(self, df, model, feature_engineer):
         """
         运行回测
@@ -638,15 +733,49 @@ class Backtester:
                 
                 # 获取信号（概率大于0.55做多，小于0.45做空，否则持有）
                 up_prob = prediction[0][1]
-                if up_prob > 0.55:
+                
+                # 计算最近的模型准确率
+                recent_signals = self.signal_history[-20:] if len(self.signal_history) >= 20 else self.signal_history
+                if len(recent_signals) > 5:  # 至少需要5个信号才进行评估
+                    correct_predictions = sum(1 for s in recent_signals if s['predicted_direction'] == s['actual_direction'] and s['predicted_direction'] != 0)
+                    recent_accuracy = correct_predictions / len([s for s in recent_signals if s['predicted_direction'] != 0])
+                else:
+                    recent_accuracy = 0.5  # 默认准确率
+                
+                # 根据最近的准确率动态调整阈值
+                if recent_accuracy > 0.6:
+                    # 模型表现良好，使用标准阈值
+                    long_threshold = 0.55
+                    short_threshold = 0.45
+                elif recent_accuracy > 0.5:
+                    # 模型表现一般，提高阈值要求
+                    long_threshold = 0.6
+                    short_threshold = 0.4
+                else:
+                    # 模型表现较差，进一步提高阈值或暂停交易
+                    long_threshold = 0.65
+                    short_threshold = 0.35
+                
+                if up_prob > long_threshold:
                     signal = 1  # 做多
-                elif up_prob < 0.45:
+                elif up_prob < short_threshold:
                     signal = -1  # 做空
                 else:
                     signal = 0   # 持有
                 
                 # 记录当前时间点的信号（用于后续分析持仓期间的信号）
                 current_timestamp = df_with_features.iloc[i]['time']
+                
+                # 记录信号历史，用于性能评估
+                actual_return = df_with_features.iloc[i+1]['close'] / df_with_features.iloc[i]['close'] - 1 if i+1 < len(df_with_features) else 0
+                actual_direction = 1 if actual_return > 0 else -1
+                self.signal_history.append({
+                    'timestamp': current_timestamp,
+                    'predicted_up_prob': up_prob,
+                    'predicted_direction': signal,
+                    'actual_direction': actual_direction,
+                    'actual_return': actual_return
+                })
                 
                 # 在执行交易前，先记录信号到当前持仓（如果有的话）
                 # 这样可以确保记录的是触发交易决策前的信号状态
