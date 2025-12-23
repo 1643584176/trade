@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import logging
+from logging.handlers import RotatingFileHandler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
@@ -16,6 +17,14 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# 添加文件日志处理器，专门记录交易信息
+file_handler = RotatingFileHandler('xauusd_trading_log.txt', maxBytes=1024*1024, backupCount=5, encoding='utf-8')
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+file_handler.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+
 
 class MarketSessionAnalyzer:
     """
@@ -635,7 +644,8 @@ class RealTimeTraderM15:
         self.is_running = False
         self.current_position = None  # 当前持仓信息
         self.magic_number = magic_number  # 魔法数字，用于隔离不同品种的订单
-        
+        self.first_run = True  # 标记是否是第一次运行
+
         # 初始化MT5连接
         try:
             import MetaTrader5 as mt5
@@ -708,8 +718,8 @@ class RealTimeTraderM15:
                 logger.error("MT5未初始化")
                 return None
                 
-            # 从MT5获取实时数据
-            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 1, count)
+            # 从MT5获取实时数据，获取额外一根K线以确保我们有足够数据
+            rates = self.mt5.copy_rates_from_pos(symbol, eval(f"self.mt5.{timeframe}"), 0, count + 1)
             
             if rates is None or len(rates) == 0:
                 logger.warning("获取MT5数据失败或数据为空")
@@ -718,6 +728,14 @@ class RealTimeTraderM15:
             # 转换为DataFrame
             df = pd.DataFrame(rates)
             df['time'] = pd.to_datetime(df['time'], unit='s')
+            
+            # 移除最后一根K线，因为它可能是未完成的K线
+            # 这确保我们只使用已完成的K线进行分析
+            if len(df) > 1:
+                df = df[:-1]  # 移除最后一行
+            elif len(df) == 1:
+                # 如果只有一根K线，则使用它（虽然可能未完成）
+                pass
             
             return df
             
@@ -759,17 +777,22 @@ class RealTimeTraderM15:
                 # 获取信号（概率大于0.55做多，小于0.45做空，否则持有）
                 up_prob = prediction[0][1]
                 
-                logger.info(f"预测概率 - 上涨: {up_prob:.4f}, 下跌: {1-up_prob:.4f}")
+                # 记录预测概率到日志文件
+                log_message = f"预测概率 - 上涨: {up_prob:.4f}, 下跌: {1-up_prob:.4f}"
+                logger.info(log_message)
                 
                 # 当上涨概率大于0.55时做多，小于0.45时做空，否则观望
                 if up_prob > 0.55:
-                    logger.info("决策: 做多")
+                    decision_message = "决策: 做多"
+                    logger.info(decision_message)
                     return 1   # 做多
                 elif up_prob < 0.45:
-                    logger.info("决策: 做空")
+                    decision_message = "决策: 做空"
+                    logger.info(decision_message)
                     return -1  # 做空
                 else:
-                    logger.info(f"决策: 观望 (概率区间0.45-0.55，当前概率: {up_prob:.4f})")
+                    decision_message = f"决策: 观望 (概率区间0.45-0.55，当前概率: {up_prob:.4f})"
+                    logger.info(decision_message)
                     return 0   # 观望
             else:
                 logger.info("没有足够的有效数据进行预测，返回观望信号")
@@ -1050,6 +1073,7 @@ class RealTimeTraderM15:
             logger.info("策略: 当预测方向出现反向则平仓否则继续持仓")
             self.is_running = True
             first_run = True
+            last_kline_time = None  # 记录上一次的K线时间
             
             # 如果已经有持仓，显示持仓信息
             if self.current_position is not None:
@@ -1068,6 +1092,20 @@ class RealTimeTraderM15:
                     
                     logger.info(f"获取到 {len(df)} 根M15 K线数据用于分析")
                     
+                    # 验证K线数据完整性 - 显示最新一根K线的时间和收盘价
+                    if len(df) > 0:
+                        latest_candle = df.iloc[-1]  # 最新一根K线
+                        current_kline_time = latest_candle['time']
+                        logger.info(f"最新K线时间: {current_kline_time}, 收盘价: {latest_candle['close']:.5f}")
+                        
+                        # 检查最新K线时间是否与上次相同，如果相同则等待5秒再查询
+                        if last_kline_time is not None and current_kline_time == last_kline_time:
+                            logger.info("最新K线时间与上次相同，等待5秒后重新查询")
+                            time.sleep(5)
+                            continue  # 跳过本次循环，重新获取数据
+                        else:
+                            last_kline_time = current_kline_time  # 更新记录的K线时间
+                    
                     # 获取当前价格
                     current_price = df['close'].iloc[-1]
                     
@@ -1084,13 +1122,52 @@ class RealTimeTraderM15:
                     
                     # 打印当前持仓状态
                     if self.current_position is not None:
-                        logger.info(f"当前持仓方向: {'做多' if self.current_position['direction'] > 0 else '做空'}, 入场价格: {self.current_position['entry_price']:.5f}")
+                        # 从MT5获取当前持仓的实际盈亏信息
+                        positions = self.mt5.positions_get(symbol=symbol)
+                        if positions is not None:
+                            # 筛选出属于当前交易器的持仓（通过magic number）
+                            filtered_positions = [pos for pos in positions if pos.magic == self.magic_number]
+                            if len(filtered_positions) > 0:
+                                current_position_info = filtered_positions[0]
+                                profit = current_position_info.profit  # 使用MT5提供的实际盈亏
+                                direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
+                                logger.info(f"当前持仓: {direction_str}, 持仓收益: {profit:.2f}美元")
+                            else:
+                                # 如果无法从MT5获取持仓信息，使用计算方式作为备选
+                                current_price = df['close'].iloc[-1]  # 获取当前价格
+                                profit = 0
+                                if self.current_position['direction'] > 0:  # 做多
+                                    profit = (current_price - self.current_position['entry_price']) * 100  # XAUUSD标准合约乘数
+                                else:  # 做空
+                                    profit = (self.current_position['entry_price'] - current_price) * 100  # XAUUSD标准合约乘数
+                                direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
+                                logger.info(f"当前持仓: {direction_str}, 持仓收益: {profit:.2f}美元")
+                        else:
+                            # 如果无法获取持仓信息，使用计算方式作为备选
+                            current_price = df['close'].iloc[-1]  # 获取当前价格
+                            profit = 0
+                            if self.current_position['direction'] > 0:  # 做多
+                                profit = (current_price - self.current_position['entry_price']) * 100  # XAUUSD标准合约乘数
+                            else:  # 做空
+                                profit = (self.current_position['entry_price'] - current_price) * 100  # XAUUSD标准合约乘数
+                            direction_str = "做多" if self.current_position['direction'] > 0 else "做空"
+                            logger.info(f"当前持仓: {direction_str}, 持仓收益: {profit:.2f}美元")
                     else:
                         logger.info("当前无持仓")
                     
                     # 等待到下一个M15周期
-                    now = datetime.now()
-                    minutes = now.minute
+                    # 使用市场时间而不是系统时间
+                    current_tick = self.mt5.symbol_info_tick(symbol)
+                    if current_tick is not None:
+                        now_market_time = datetime.fromtimestamp(current_tick.time)
+                        minutes = now_market_time.minute
+                        seconds = now_market_time.second
+                    else:
+                        # 如果无法获取市场时间，则使用系统时间作为备选
+                        now_market_time = datetime.now()
+                        minutes = now_market_time.minute
+                        seconds = now_market_time.second
+                    
                     # 计算下一个15分钟周期的分钟数 (0, 15, 30, 45)
                     next_minute = ((minutes // 15) + 1) * 15
                     if next_minute == 60:
@@ -1102,7 +1179,12 @@ class RealTimeTraderM15:
                     else:
                         wait_minutes = (60 - minutes) + next_minute
                     
-                    wait_seconds = wait_minutes * 60 - now.second
+                    wait_seconds = wait_minutes * 60 - seconds
+                    
+                    # 不再额外等待30秒，直接使用计算的等待时间
+                    # if self.first_run:
+                    #     wait_seconds += 30
+                    #     self.first_run = False  # 重置标志，后续运行不再额外等待
                     
                     logger.info(f"等待 {wait_seconds} 秒到下一个M15周期")
                     time.sleep(wait_seconds)
@@ -1114,8 +1196,18 @@ class RealTimeTraderM15:
                 except Exception as e:
                     logger.error(f"交易循环异常: {str(e)}")
                     # 出错后等待到下一个M15周期
-                    now = datetime.now()
-                    minutes = now.minute
+                    # 使用市场时间而不是系统时间
+                    current_tick = self.mt5.symbol_info_tick(symbol)
+                    if current_tick is not None:
+                        now_market_time = datetime.fromtimestamp(current_tick.time)
+                        minutes = now_market_time.minute
+                        seconds = now_market_time.second
+                    else:
+                        # 如果无法获取市场时间，则使用系统时间作为备选
+                        now_market_time = datetime.now()
+                        minutes = now_market_time.minute
+                        seconds = now_market_time.second
+                    
                     next_minute = ((minutes // 15) + 1) * 15
                     if next_minute == 60:
                         next_minute = 0
@@ -1125,7 +1217,12 @@ class RealTimeTraderM15:
                     else:
                         wait_minutes = (60 - minutes) + next_minute
                     
-                    wait_seconds = wait_minutes * 60 - now.second
+                    wait_seconds = wait_minutes * 60 - seconds
+                    
+                    # 不再额外等待30秒，直接使用计算的等待时间
+                    # if self.first_run:
+                    #     wait_seconds += 30
+                    #     self.first_run = False  # 重置标志，后续运行不再额外等待
                     
                     logger.info(f"出错后等待 {wait_seconds} 秒到下一个M15周期")
                     time.sleep(wait_seconds)
@@ -1154,7 +1251,7 @@ def main():
     trader = RealTimeTraderM15()
     
     # 运行实时交易（在实际应用中取消注释下面一行）
-    trader.run("XAUUSD", 1.0)
+    trader.run("XAUUSD", 0.1)
     logger.info("基于M15周期的实时交易系统启动")
 
 if __name__ == "__main__":
