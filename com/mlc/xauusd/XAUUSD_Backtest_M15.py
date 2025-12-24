@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # 在文件顶部添加日期配置变量
-START_DATE = '2025-12-15'   # 格式: '2024-06-01' 或 None 使用默认值
-END_DATE = '2025-12-23'    # 格式: '2024-12-31' 或 None 使用默认值
+START_DATE = '2025-12-20'   # 格式: '2024-06-01' 或 None 使用默认值
+END_DATE = '2025-12-24'    # 格式: '2024-12-31' 或 None 使用默认值
 
 
 class MarketSessionAnalyzer:
@@ -467,9 +467,9 @@ class EvoAIModel:
                 'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
             ]
             
-            # 创建目标变量（未来1小时的价格变动方向）
+            # 创建目标变量（未来1个M15周期的价格变动方向）
             df = df.copy()
-            df['future_return'] = df['close'].shift(-4) / df['close'] - 1  # M15数据，4个周期为1小时
+            df['future_return'] = df['close'].shift(-1) / df['close'] - 1  # M15数据，预测下一个M15周期
             df['target'] = (df['future_return'] > 0).astype(int)  # 1表示上涨，0表示下跌
             
             # 删除含有NaN的行（仅在训练时使用）
