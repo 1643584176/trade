@@ -182,6 +182,31 @@ class M5FeatureEngineer:
             df['vol_cluster'] = np.where(df['volatility_pct'] > vol_mean + vol_std, 2,  # 高波动
                                        np.where(df['volatility_pct'] < vol_mean - vol_std, 0, 1))  # 低波动/中等波动
             
+            # 添加涨跌动能特征
+            df['price_change_pct'] = df['close'].pct_change()
+            df['momentum_3'] = df['price_change_pct'].rolling(window=3).sum()  # 3根K线的涨跌幅之和
+            df['momentum_5'] = df['price_change_pct'].rolling(window=5).sum()  # 5根K线的涨跌幅之和
+            
+            # 成交量与价格背离特征
+            df['volume_price_divergence'] = df['tick_volume'].pct_change() - df['price_change_pct']
+            
+            # 连续上涨/下跌次数（短期趋势持续性）
+            df['price_direction'] = np.where(df['price_change_pct'] > 0, 1, np.where(df['price_change_pct'] < 0, -1, 0))
+            df['consecutive_up'] = (df['price_direction'] == 1).astype(int).groupby((df['price_direction'] != 1).cumsum()).cumsum()
+            df['consecutive_down'] = (df['price_direction'] == -1).astype(int).groupby((df['price_direction'] != -1).cumsum()).cumsum()
+            
+            # K线实体强度（收盘价与开盘价的相对位置）
+            df['body_strength'] = (df['close'] - df['open']) / (df['high'] - df['low'] + 1e-8)  # 防止除零
+            
+            # 上下影线强度
+            df['upper_shadow'] = (df['high'] - np.maximum(df['close'], df['open'])) / (df['high'] - df['low'] + 1e-8)
+            df['lower_shadow'] = (np.minimum(df['close'], df['open']) - df['low']) / (df['high'] - df['low'] + 1e-8)
+            
+            # 价格位置（在短期高低点中的位置）
+            df['high_5'] = df['high'].rolling(window=5).max()
+            df['low_5'] = df['low'].rolling(window=5).min()
+            df['price_position_5'] = (df['close'] - df['low_5']) / (df['high_5'] - df['low_5'] + 1e-8)  # 防止除零
+            
             logger.info("增强特征添加完成")
             return df
 
