@@ -21,7 +21,7 @@ class BacktestConfig:
     M5_TIMEFRAME = mt5.TIMEFRAME_M5
     M1_TIMEFRAME = mt5.TIMEFRAME_M1
     MODEL_PATH = "xauusd_m5_model.json"  # 模型文件路径
-    SCALER_PATH = "scaler.pkl"  # 标准化器路径
+    SCALER_PATH = "m5_scaler.pkl"  # 标准化器路径
     HISTORY_M5_BARS = 120  # 模型输入序列长度
     PREDICT_FUTURE_BARS = 3  # 模型预测长度
 

@@ -31,7 +31,7 @@ class ModelConfig:
     PREDICT_FUTURE_BARS = 3  # 预测未来K线数量
     TRAIN_TEST_SPLIT = 0.8
     MODEL_SAVE_PATH = "xauusd_m5_model.json"  # XGBoost模型保存路径
-    SCALER_SAVE_PATH = "scaler.pkl"
+    SCALER_SAVE_PATH = "m5_scaler.pkl"
     UTC_TZ = timezone.utc
 
 class M5ModelTrainer(BaseModelTrainer):
