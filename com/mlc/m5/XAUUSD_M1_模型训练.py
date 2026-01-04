@@ -102,7 +102,7 @@ class M1ModelTrainer(BaseModelTrainer):
             # 新增涨跌活跃度差异特征
             'up_down_activity_diff',  # 涨跌活跃度差异
             # 核心波动特征 - 只保留一个atr_7，删除重复的
-            'volatility_pct',  # 波动率百分比
+
             # 新增跌类专属特征
             'activity_trend_down',  # 活跃度趋势下跌分量
             'ma5_deviation_down',  # ma5_deviation 向下偏离
