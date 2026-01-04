@@ -144,3 +144,6 @@ cython_debug/
 
 # Ignore all pkl files
 *.pkl
+
+# Ignore all json files
+*.json
