@@ -334,6 +334,57 @@ class FeatureEngineer:
             logger.error(f"添加信号一致性特征异常: {str(e)}")
             return df
 
+    def _add_self_check_features(self, df):
+        """
+        添加自检特征，帮助模型了解自身预测表现
+        
+        Args:
+            df (DataFrame): 原始数据
+            
+        Returns:
+            DataFrame: 添加自检特征后的数据
+        """
+        try:
+            df = df.copy()
+            
+            # 添加滚动窗口内的预测准确率特征
+            # 使用模型预测概率与实际价格变动方向的一致性作为特征
+            if 'close' in df.columns and 'rsi' in df.columns:
+                # 计算未来价格变动方向
+                df['future_direction'] = np.where(df['close'].shift(-1) > df['close'], 1, -1)
+                
+                # 创建RSI预测方向（RSI > 50 为上涨，否则为下跌）
+                df['rsi_direction'] = np.where(df['rsi'] > 50, 1, -1)
+                
+                # 计算预测一致性
+                df['prediction_consistency'] = np.where(df['rsi_direction'] == df['future_direction'], 1, 0)
+                
+                # 滚动窗口内的预测准确率
+                df['rolling_accuracy_10'] = df['prediction_consistency'].rolling(window=10, min_periods=1).mean()
+                df['rolling_accuracy_20'] = df['prediction_consistency'].rolling(window=20, min_periods=1).mean()
+            
+            # 添加波动率聚类特征
+            if 'volatility_20' in df.columns:
+                df['vol_cluster'] = df['volatility_20'].rolling(window=10, min_periods=1).mean() / (df['volatility_20'] + 1e-8)
+            
+            # 添加趋势强度特征
+            if 'sma_5' in df.columns and 'sma_20' in df.columns:
+                df['sma_trend_strength'] = abs(df['sma_5'] - df['sma_20']) / df['close']
+                df['sma_trend_direction'] = np.where(df['sma_5'] > df['sma_20'], 1, -1)
+            
+            # 添加相对位置特征
+            if 'close' in df.columns and 'bb_lower' in df.columns and 'bb_upper' in df.columns:
+                df['price_position_in_bb'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'] + 1e-8)
+            
+            # 添加动量变化特征
+            if 'momentum_5' in df.columns:
+                df['momentum_change'] = df['momentum_5'].diff()
+                
+            return df
+        except Exception as e:
+            logger.error(f"添加自检特征异常: {str(e)}")
+            return df
+
     def _calculate_rsi(self, prices, window):
         """
         计算RSI指标
@@ -393,6 +444,9 @@ class FeatureEngineer:
 
             # 添加信号一致性特征
             df_with_all_features = self._add_signal_consistency_features(df_with_all_features)
+            
+            # 添加自检特征
+            df_with_all_features = self._add_self_check_features(df_with_all_features)
 
             logger.info("所有特征生成完成")
             return df_with_all_features
@@ -465,12 +519,16 @@ class EvoAIModel:
                 'bb_position', 'trend_strength',
                 # 新增的信号一致性特征
                 'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
-                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency',
+                # 新增的自检特征
+                'rolling_accuracy_10', 'rolling_accuracy_20', 'vol_cluster',
+                'sma_trend_strength', 'sma_trend_direction', 'price_position_in_bb',
+                'momentum_change'
             ]
 
-            # 创建目标变量（未来1个M15周期的价格变动方向）
+            # 创建目标变量（未来1个M5周期的价格变动方向）
             df = df.copy()
-            df['future_return'] = df['close'].shift(-1) / df['close'] - 1  # M15数据，预测下一个M15周期
+            df['future_return'] = df['close'].shift(-6) / df['close'] - 1  # M5数据，预测下一个M30周期
             df['target'] = (df['future_return'] > 0).astype(int)  # 1表示上涨，0表示下跌
 
             # 删除含有NaN的行（仅在训练时使用）
@@ -518,7 +576,11 @@ class EvoAIModel:
                 'bb_position', 'trend_strength',
                 # 新增的信号一致性特征
                 'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
-                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency',
+                # 新增的自检特征
+                'rolling_accuracy_10', 'rolling_accuracy_20', 'vol_cluster',
+                'sma_trend_strength', 'sma_trend_direction', 'price_position_in_bb',
+                'momentum_change'
             ]
 
             X = df[feature_columns]
@@ -913,7 +975,7 @@ class Backtester:
             logger.error(f"保存交易历史时出错: {str(e)}")
 
 
-def get_mt5_data(symbol="XAUUSD", timeframe="TIMEFRAME_M15", days=30):
+def get_mt5_data(symbol="XAUUSD", timeframe="TIMEFRAME_M5", days=30):
     """
     从MT5获取历史数据
 
@@ -981,10 +1043,10 @@ def main(start_date=None, end_date=None):
         if start_date and end_date:
             logger.info(f"使用指定日期范围: {start_date} 到 {end_date}")
             # 这里可以根据需要实现从文件或其他来源读取指定日期范围的数据
-            df = get_mt5_data("XAUUSD", "TIMEFRAME_M15", 90)  # 默认获取最近90天数据
+            df = get_mt5_data("XAUUSD", "TIMEFRAME_M5", 90)  # 默认获取最近90天数据
         else:
             # 获取最近30天的数据
-            df = get_mt5_data("XAUUSD", "TIMEFRAME_M15", 90)
+            df = get_mt5_data("XAUUSD", "TIMEFRAME_M5", 90)
 
         if df is None or len(df) == 0:
             logger.error("获取历史数据失败")

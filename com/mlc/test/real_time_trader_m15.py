@@ -359,6 +359,9 @@ class FeatureEngineer:
 
             # 添加信号一致性特征
             df_with_all_features = self._add_signal_consistency_features(df_with_all_features)
+            
+            # 添加自检特征
+            df_with_all_features = self._add_self_check_features(df_with_all_features)
 
             return df_with_all_features
 
@@ -404,6 +407,57 @@ class FeatureEngineer:
             return df
         except Exception as e:
             logger.error(f"添加信号一致性特征异常: {str(e)}")
+            return df
+
+    def _add_self_check_features(self, df):
+        """
+        添加自检特征，帮助模型了解自身预测表现
+        
+        Args:
+            df (DataFrame): 原始数据
+            
+        Returns:
+            DataFrame: 添加自检特征后的数据
+        """
+        try:
+            df = df.copy()
+            
+            # 添加滚动窗口内的预测准确率特征
+            # 使用模型预测概率与实际价格变动方向的一致性作为特征
+            if 'close' in df.columns and 'rsi' in df.columns:
+                # 计算未来价格变动方向
+                df['future_direction'] = np.where(df['close'].shift(-1) > df['close'], 1, -1)
+                
+                # 创建RSI预测方向（RSI > 50 为上涨，否则为下跌）
+                df['rsi_direction'] = np.where(df['rsi'] > 50, 1, -1)
+                
+                # 计算预测一致性
+                df['prediction_consistency'] = np.where(df['rsi_direction'] == df['future_direction'], 1, 0)
+                
+                # 滚动窗口内的预测准确率
+                df['rolling_accuracy_10'] = df['prediction_consistency'].rolling(window=10, min_periods=1).mean()
+                df['rolling_accuracy_20'] = df['prediction_consistency'].rolling(window=20, min_periods=1).mean()
+            
+            # 添加波动率聚类特征
+            if 'volatility_20' in df.columns:
+                df['vol_cluster'] = df['volatility_20'].rolling(window=10, min_periods=1).mean() / (df['volatility_20'] + 1e-8)
+            
+            # 添加趋势强度特征
+            if 'sma_5' in df.columns and 'sma_20' in df.columns:
+                df['sma_trend_strength'] = abs(df['sma_5'] - df['sma_20']) / df['close']
+                df['sma_trend_direction'] = np.where(df['sma_5'] > df['sma_20'], 1, -1)
+            
+            # 添加相对位置特征
+            if 'close' in df.columns and 'bb_lower' in df.columns and 'bb_upper' in df.columns:
+                df['price_position_in_bb'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'] + 1e-8)
+            
+            # 添加动量变化特征
+            if 'momentum_5' in df.columns:
+                df['momentum_change'] = df['momentum_5'].diff()
+                
+            return df
+        except Exception as e:
+            logger.error(f"添加自检特征异常: {str(e)}")
             return df
 
 
@@ -474,12 +528,16 @@ class EvoAIModel:
                 'bb_position', 'trend_strength',
                 # 新增的信号一致性特征
                 'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
-                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency',
+                # 新增的自检特征
+                'rolling_accuracy_10', 'rolling_accuracy_20', 'vol_cluster',
+                'sma_trend_strength', 'sma_trend_direction', 'price_position_in_bb',
+                'momentum_change'
             ]
 
-            # 创建目标变量（未来1个M15周期的价格变动方向）
+            # 创建目标变量（未来1个M5周期的价格变动方向）
             df = df.copy()
-            df['future_return'] = df['close'].shift(-1) / df['close'] - 1  # M15数据，预测下一个M15周期
+            df['future_return'] = df['close'].shift(-1) / df['close'] - 1  # M5数据，预测下一个M5周期
             df['target'] = (df['future_return'] > 0).astype(int)  # 1表示上涨，0表示下跌
 
             # 删除含有NaN的行（仅在训练时使用）
@@ -527,7 +585,11 @@ class EvoAIModel:
                 'bb_position', 'trend_strength',
                 # 新增的信号一致性特征
                 'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
-                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency'
+                'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency',
+                # 新增的自检特征
+                'rolling_accuracy_10', 'rolling_accuracy_20', 'vol_cluster',
+                'sma_trend_strength', 'sma_trend_direction', 'price_position_in_bb',
+                'momentum_change'
             ]
             
             # 检查是否存在训练时没有的特征
@@ -633,7 +695,7 @@ class EvoAIModel:
             self._initialize_model()
 
 
-class RealTimeTraderM15:
+class RealTimeTraderM5:
     """
     实时交易类
     """
@@ -1017,7 +1079,7 @@ class RealTimeTraderM15:
                 ticket = self.open_position_mt5(symbol, signal, lot_size)
                 if ticket is not None:
                     # 使用从MT5获取的最新数据时间作为入场时间
-                    df = self.get_latest_data(symbol, "TIMEFRAME_M15", 1)
+                    df = self.get_latest_data(symbol, "TIMEFRAME_M5", 1)
                     entry_time = df['time'].iloc[-1] if df is not None and len(df) > 0 else datetime.now()
 
                     self.current_position = {
@@ -1092,7 +1154,7 @@ class RealTimeTraderM15:
                 ticket = self.open_position_mt5(symbol, signal, lot_size)
                 if ticket is not None:
                     # 使用从MT5获取的最新数据时间作为入场时间
-                    df = self.get_latest_data(symbol, "TIMEFRAME_M15", 1)
+                    df = self.get_latest_data(symbol, "TIMEFRAME_M5", 1)
                     entry_time = df['time'].iloc[-1] if df is not None and len(df) > 0 else datetime.now()
 
                     self.current_position = {
@@ -1113,14 +1175,14 @@ class RealTimeTraderM15:
     def run(self, symbol="XAUUSD", lot_size=2.0):
         """
         运行实时交易
-        基于M15周期数据进行交易，当预测方向出现反向则平仓否则继续持仓
+        基于M5周期数据进行交易，当预测方向出现反向则平仓否则继续持仓
 
         参数:
             symbol (str): 交易品种
             lot_size (float): 手数
         """
         try:
-            logger.info(f"开始基于M15周期的实时交易 {symbol}，手数: {lot_size}")
+            logger.info(f"开始基于M5周期的实时交易 {symbol}，手数: {lot_size}")
             logger.info("策略: 当预测方向出现反向则平仓否则继续持仓")
             self.is_running = True
             first_run = True
@@ -1133,15 +1195,21 @@ class RealTimeTraderM15:
             
             while self.is_running:
                 try:
+                    # 检查是否有暂停交易的标记文件
+                    if os.path.exists("暂停交易.flag"):
+                        logger.info("检测到暂停交易标记，暂停交易操作...")
+                        time.sleep(5)  # 等待5秒后继续检查
+                        continue
+                    
                     # 获取最新数据
-                    df = self.get_latest_data(symbol, "TIMEFRAME_M15", 100)
+                    df = self.get_latest_data(symbol, "TIMEFRAME_M5", 100)
 
                     if df is None or len(df) < 50:
                         logger.warning("数据不足，等待下次更新")
                         time.sleep(60)  # 等待1分钟
                         continue
 
-                    logger.info(f"获取到 {len(df)} 根M15 K线数据用于分析")
+                    logger.info(f"获取到 {len(df)} 根M5 K线数据用于分析")
 
                     # 验证K线数据完整性 - 显示最新一根K线的时间和收盘价
                     if len(df) > 0:
@@ -1206,7 +1274,7 @@ class RealTimeTraderM15:
                     else:
                         logger.info("当前无持仓")
 
-                    # 等待到下一个M15周期
+                    # 等待到下一个M5周期
                     # 使用市场时间而不是系统时间
                     current_tick = self.mt5.symbol_info_tick(symbol)
                     if current_tick is not None:
@@ -1219,8 +1287,8 @@ class RealTimeTraderM15:
                         minutes = now_market_time.minute
                         seconds = now_market_time.second
                     
-                    # 计算下一个15分钟周期的分钟数 (0, 15, 30, 45)
-                    next_minute = ((minutes // 15) + 1) * 15
+
+                    next_minute = ((minutes // 5) + 1) * 5
                     if next_minute == 60:
                         next_minute = 0
 
@@ -1237,7 +1305,7 @@ class RealTimeTraderM15:
                     #     wait_seconds += 30
                     #     self.first_run = False  # 重置标志，后续运行不再额外等待
 
-                    logger.info(f"等待 {wait_seconds} 秒到下一个M15周期")
+                    logger.info(f"等待 {wait_seconds} 秒到下一个M5周期")
                     time.sleep(wait_seconds)
 
                 except KeyboardInterrupt:
@@ -1246,7 +1314,7 @@ class RealTimeTraderM15:
                     break
                 except Exception as e:
                     logger.error(f"交易循环异常: {str(e)}")
-                    # 出错后等待到下一个M15周期
+                    # 出错后等待到下一个M5周期
                     # 使用市场时间而不是系统时间
                     current_tick = self.mt5.symbol_info_tick(symbol)
                     if current_tick is not None:
@@ -1259,7 +1327,7 @@ class RealTimeTraderM15:
                         minutes = now_market_time.minute
                         seconds = now_market_time.second
 
-                    next_minute = ((minutes // 15) + 1) * 15
+                    next_minute = ((minutes // 5) + 1) * 5
                     if next_minute == 60:
                         next_minute = 0
 
@@ -1275,7 +1343,7 @@ class RealTimeTraderM15:
                     #     wait_seconds += 30
                     #     self.first_run = False  # 重置标志，后续运行不再额外等待
 
-                    logger.info(f"出错后等待 {wait_seconds} 秒到下一个M15周期")
+                    logger.info(f"出错后等待 {wait_seconds} 秒到下一个M5周期")
                     time.sleep(wait_seconds)
 
         except Exception as e:
@@ -1299,11 +1367,11 @@ def main():
     """
     主函数
     """
-    trader = RealTimeTraderM15()
+    trader = RealTimeTraderM5()
 
     # 运行实时交易（在实际应用中取消注释下面一行）
     trader.run("XAUUSD", 0.2)
-    logger.info("基于M15周期的实时交易系统启动")
+    logger.info("基于M5周期的实时交易系统启动")
 
 
 if __name__ == "__main__":

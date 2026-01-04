@@ -347,11 +347,65 @@ class FeatureEngineer:
 
             # 添加反转点特征
             df_with_all_features = self.session_analyzer.detect_reversal_points(df_with_k_features)
+            
+            # 添加自检特征
+            df_with_all_features = self._add_self_check_features(df_with_all_features)
 
             return df_with_all_features
 
         except Exception as e:
             logger.error(f"生成特征异常: {str(e)}")
+            return df
+
+    def _add_self_check_features(self, df):
+        """
+        添加自检特征，帮助模型了解自身预测表现
+        
+        Args:
+            df (DataFrame): 原始数据
+            
+        Returns:
+            DataFrame: 添加自检特征后的数据
+        """
+        try:
+            df = df.copy()
+            
+            # 添加滚动窗口内的预测准确率特征
+            # 使用模型预测概率与实际价格变动方向的一致性作为特征
+            if 'close' in df.columns and 'rsi' in df.columns:
+                # 计算未来价格变动方向
+                df['future_direction'] = np.where(df['close'].shift(-1) > df['close'], 1, -1)
+                
+                # 创建RSI预测方向（RSI > 50 为上涨，否则为下跌）
+                df['rsi_direction'] = np.where(df['rsi'] > 50, 1, -1)
+                
+                # 计算预测一致性
+                df['prediction_consistency'] = np.where(df['rsi_direction'] == df['future_direction'], 1, 0)
+                
+                # 滚动窗口内的预测准确率
+                df['rolling_accuracy_10'] = df['prediction_consistency'].rolling(window=10, min_periods=1).mean()
+                df['rolling_accuracy_20'] = df['prediction_consistency'].rolling(window=20, min_periods=1).mean()
+            
+            # 添加波动率聚类特征
+            if 'volatility_20' in df.columns:
+                df['vol_cluster'] = df['volatility_20'].rolling(window=10, min_periods=1).mean() / (df['volatility_20'] + 1e-8)
+            
+            # 添加趋势强度特征
+            if 'sma_5' in df.columns and 'sma_20' in df.columns:
+                df['sma_trend_strength'] = abs(df['sma_5'] - df['sma_20']) / df['close']
+                df['sma_trend_direction'] = np.where(df['sma_5'] > df['sma_20'], 1, -1)
+            
+            # 添加相对位置特征
+            if 'close' in df.columns and 'bb_lower' in df.columns and 'bb_upper' in df.columns:
+                df['price_position_in_bb'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'] + 1e-8)
+            
+            # 添加动量变化特征
+            if 'momentum_5' in df.columns:
+                df['momentum_change'] = df['momentum_5'].diff()
+                
+            return df
+        except Exception as e:
+            logger.error(f"添加自检特征异常: {str(e)}")
             return df
 
 
@@ -419,7 +473,11 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的自检特征
+                'rolling_accuracy_10', 'rolling_accuracy_20', 'vol_cluster',
+                'sma_trend_strength', 'sma_trend_direction', 'price_position_in_bb',
+                'momentum_change'
             ]
 
             # 创建目标变量（未来1小时的价格变动方向）
@@ -469,7 +527,11 @@ class EvoAIModel:
                 'ma_cross', 'rsi_reversal', 'local_high', 'local_low',
                 'price_change', 'abs_price_change', 'relative_price_change',
                 'price_volatility', 'price_volatility_ratio', 'price_spike',
-                'bb_position', 'trend_strength'
+                'bb_position', 'trend_strength',
+                # 新增的自检特征
+                'rolling_accuracy_10', 'rolling_accuracy_20', 'vol_cluster',
+                'sma_trend_strength', 'sma_trend_direction', 'price_position_in_bb',
+                'momentum_change'
             ]
 
             X = df[feature_columns]
