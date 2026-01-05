@@ -329,6 +329,11 @@ class M1ModelTrainer(BaseModelTrainer):
         # 准备特征和目标变量
         X, y, feature_names = self.prepare_features_and_target(df, "M1")
         
+        # 打印使用的特征列表
+        print(f"\n📊 M1模型训练使用的特征列表 (共{len(feature_names)}个):")
+        for i, feature in enumerate(feature_names, 1):
+            print(f"  {i:2d}. {feature}")
+        
         # 对特征进行Z-score标准化
         from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler()

@@ -93,11 +93,11 @@ class M5ModelTrainer(BaseModelTrainer):
             # 核心特征（清理重复特征后）
             'atr_14',  # 核心ATR特征 - 保留高权重版本
             'hl_ratio',  # 核心高低价比值 - 保留高权重版本
-            'volatility_pct',  # 核心波动率特征
             # 确保仅保留一个tick_volume特征，移除任何重复的成交量特征
             # 新增dynamic_activity特征（当前5分钟波动率/过去24小时同周期均值）
             # 删除重复特征：彻底清理重复的tick_volume特征，仅保留高权重版本
             # 删除重复的dynamic_activity特征
+            # 注意：volatility_pct已在前面定义，此处不再重复
         ]
         
         # 检查所有特征列是否存在
@@ -348,6 +348,11 @@ class M5ModelTrainer(BaseModelTrainer):
         
         # 准备特征和目标变量
         X, y, feature_names = self.prepare_features_and_target(df, "M5")
+        
+        # 打印使用的特征列表
+        print(f"\n📊 M5模型训练使用的特征列表 (共{len(feature_names)}个):")
+        for i, feature in enumerate(feature_names, 1):
+            print(f"  {i:2d}. {feature}")
         
         # 对特征进行Z-score标准化
         from sklearn.preprocessing import StandardScaler

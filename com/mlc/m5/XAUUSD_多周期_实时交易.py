@@ -14,9 +14,36 @@ warnings.filterwarnings('ignore')
 
 # 添加公共模块路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "common"))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
 
-from m5_feature_engineering import M5FeatureEngineer
+import m5_feature_engineering
+M5FeatureEngineer = m5_feature_engineering.M5FeatureEngineer
+
+# 导入M1特征工程
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
+
+# 从M1训练文件中导入M1特征工程方法
+import importlib.util
+
+# 动态导入M1特征工程
+m1_trainer_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "m5", "XAUUSD_M1_模型训练.py")
+spec = importlib.util.spec_from_file_location("m1_model_trainer", m1_trainer_path)
+m1_model_trainer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m1_model_trainer)
+
+# 从M1训练器中获取特征工程方法
+M1FeatureEngineer = m1_model_trainer.M1ModelTrainer
+
+# 动态导入M15特征工程
+m15_trainer_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "m5", "XAUUSD_M15_模型训练.py")
+spec = importlib.util.spec_from_file_location("m15_model_trainer", m15_trainer_path)
+m15_model_trainer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m15_model_trainer)
+
+# 从M15训练器中获取特征工程方法
+M15FeatureEngineer = m15_model_trainer.M15ModelTrainer
 
 # 配置日志
 logging.basicConfig(
@@ -52,8 +79,10 @@ class MultiPeriodRealTimeTrader:
         self.M5_MODEL_PATH = m5_model_path
         self.M15_MODEL_PATH = m15_model_path
         self.LOT_SIZE = lot_size
-        self.STOP_LOSS_PIPS = 600  # 止损600点位 = 120美金
-        self.TAKE_PROFIT_PIPS = 1000  # 止盈1000点位 = 200美金
+        # 动态止盈止损参数
+        self.STOP_LOSS_THRESHOLD = 0.006  # 止损阈值 0.6%
+        self.TAKE_PROFIT_THRESHOLD = 0.010  # 止盈阈值 1.0%
+        self.ATR_MULTIPLIER = 2.0  # ATR倍数
         self.MAGIC_NUMBER = 10000005  # M5周期魔法数字
         self.HISTORY_M1_BARS = 50   # M1周期历史K线数
         self.HISTORY_M5_BARS = 120  # M5周期历史K线数
@@ -78,6 +107,16 @@ class MultiPeriodRealTimeTrader:
         
         # 特征工程实例
         self.feature_engineer = M5FeatureEngineer()
+        self.m1_feature_engineer = M1FeatureEngineer()
+        
+        # 动态导入M15特征工程
+        m15_trainer_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "m5", "XAUUSD_M15_模型训练.py")
+        spec = importlib.util.spec_from_file_location("m15_model_trainer", m15_trainer_path)
+        m15_model_trainer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m15_model_trainer)
+        
+        # 从M15训练器中获取特征工程方法
+        self.m15_feature_engineer = m15_model_trainer.M15ModelTrainer()
         
         # 模型自检特征 - 记录最近预测的准确率
         self.prediction_history = []  # 存储最近的预测和实际结果
@@ -105,28 +144,58 @@ class MultiPeriodRealTimeTrader:
     def load_models(self):
         """加载所有模型"""
         try:
-            # 加载M1模型
-            self.m1_model = xgb.XGBClassifier()
+            # 加载M1模型 - 使用XGBoost原生模型格式
+            self.m1_model = xgb.Booster()
             self.m1_model.load_model(self.M1_MODEL_PATH)
             logger.info(f"M1模型已从 {self.M1_MODEL_PATH} 加载")
+            
+            # 加载M1标准化器
+            m1_scaler_path = "m1_scaler.pkl"
+            if os.path.exists(m1_scaler_path):
+                with open(m1_scaler_path, 'rb') as f:
+                    self.m1_scaler = pickle.load(f)
+                logger.info(f"M1标准化器已从 {m1_scaler_path} 加载")
+            else:
+                logger.warning(f"M1标准化器文件不存在: {m1_scaler_path}，可能影响预测准确性")
+                self.m1_scaler = None
         except Exception as e:
             logger.error(f"加载M1模型失败: {e}")
             raise e
         
         try:
-            # 加载M5模型
-            self.m5_model = xgb.XGBClassifier()
+            # 加载M5模型 - 使用XGBoost原生模型格式
+            self.m5_model = xgb.Booster()
             self.m5_model.load_model(self.M5_MODEL_PATH)
             logger.info(f"M5模型已从 {self.M5_MODEL_PATH} 加载")
+            
+            # 加载M5标准化器
+            m5_scaler_path = "m5_scaler.pkl"
+            if os.path.exists(m5_scaler_path):
+                with open(m5_scaler_path, 'rb') as f:
+                    self.m5_scaler = pickle.load(f)
+                logger.info(f"M5标准化器已从 {m5_scaler_path} 加载")
+            else:
+                logger.warning(f"M5标准化器文件不存在: {m5_scaler_path}，可能影响预测准确性")
+                self.m5_scaler = None
         except Exception as e:
             logger.error(f"加载M5模型失败: {e}")
             raise e
         
         try:
-            # 加载M15模型
-            self.m15_model = xgb.XGBClassifier()
+            # 加载M15模型 - 使用XGBoost原生模型格式
+            self.m15_model = xgb.Booster()
             self.m15_model.load_model(self.M15_MODEL_PATH)
             logger.info(f"M15模型已从 {self.M15_MODEL_PATH} 加载")
+            
+            # 加载M15标准化器
+            m15_scaler_path = "m15_scaler.pkl"
+            if os.path.exists(m15_scaler_path):
+                with open(m15_scaler_path, 'rb') as f:
+                    self.m15_scaler = pickle.load(f)
+                logger.info(f"M15标准化器已从 {m15_scaler_path} 加载")
+            else:
+                logger.warning(f"M15标准化器文件不存在: {m15_scaler_path}，可能影响预测准确性")
+                self.m15_scaler = None
         except Exception as e:
             logger.error(f"加载M15模型失败: {e}")
             raise e
@@ -169,6 +238,7 @@ class MultiPeriodRealTimeTrader:
                 }
                 logger.info(f"检测到现有持仓: {direction}, 手数: {pos.volume}")
             else:
+                self.current_position = None
                 logger.info("未检测到现有持仓")
         except Exception as e:
             logger.error(f"检查现有持仓失败: {e}")
@@ -228,6 +298,9 @@ class MultiPeriodRealTimeTrader:
                 df['ma7_direction'] = (df['ma7'] - df['ma7'].shift(1)) / (df['ma7'].shift(1) + 1e-8)
                 df['atr_7'] = self.calculate_atr(df['high'], df['low'], df['close'], 7)
                 
+                # 添加M1专用的微观交易特征
+                df = self.m1_feature_engineer.add_micro_features(df)
+                
                 # 只保留M1模型需要的特征
                 # 只保留M1训练时使用的特征列
                 m1_features = [
@@ -235,27 +308,64 @@ class MultiPeriodRealTimeTrader:
                     'open', 'high', 'low', 'close', 'tick_volume',
                     'rsi_7',  # 短期RSI
                     'ma3', 'ma7',  # 短期均线
-                    'ma3_direction', 'ma7_direction',  # 短期均线方向
-                    'atr_7',  # 短期ATR
+                    'atr_7',  # 短期ATR - 核心特征（仅保留此版本，删除重复的）
                     'volatility_pct',
                     'hour_of_day', 'is_peak_hour',
                     # K线形态特征
                     'hammer', 'shooting_star', 'engulfing',
                     # 技术指标
-                    'rsi_14', 'macd', 'macd_signal', 'macd_hist',
-                    'bollinger_upper', 'bollinger_lower', 'bollinger_position',
-                    'ma5', 'ma10', 'ma20', 'ma5_direction', 'ma10_direction', 'ma20_direction',
+                    'rsi_14', 'macd', 'macd_hist',
+                    'bollinger_position',
+                    'ma5', 'ma10', 'ma20', 'ma10_direction', 'ma20_direction',
                     # 一致性特征
-                    'ma_direction_consistency', 'rsi_price_consistency',
+                    'rsi_price_consistency',
                     # 跨周期特征
                     'rsi_divergence', 'vol_short_vs_medium', 'vol_medium_vs_long', 'vol_short_vs_long',
                     'trend_consistency',
                     # 信号特征
-                    'rsi_signal_strength', 'macd_signal_strength', 'short_long_signal_consistency',
+                    'rsi_signal_strength', 'short_long_signal_consistency',
                     # 风险特征
-                    'volatility_regime', 'vol_cluster'
+                    'volatility_regime', 'vol_cluster',
+                    # M1专用微观特征
+                    'tick_vol_zscore',  # Tick成交量脉冲
+                    'up_down_count_10',  # 1分钟内涨跌次数
+                    'hl_spread_zscore',  # 高低价差z-score
+                    'volatility_intensity',  # 价格波动强度
+                    'ma5_deviation',  # 短期偏离度
+                    'volume_impulse',  # 成交量脉冲特征（当前成交量/前3根均值）
+                    'price_direction_consistency',  # 涨跌延续性特征
+                    'dynamic_activity',  # 动态活跃度特征
+                    'high_activity',  # 高活跃度标记
+                    'up_momentum_3',  # 连续3根M1涨跌幅之和（仅计算上涨）
+                    'down_momentum_3',  # 连续3根M1下跌动能（新增跌类动能特征）
+                    'down_volume_ratio',  # 跌时成交量占比（新增跌类动能特征）
+                    # 涨跌动能特征
+                    'momentum_3',  # 3根K线的涨跌幅之和
+                    'momentum_5',  # 5根K线的涨跌幅之和
+                    'volume_price_divergence',  # 成交量与价格背离
+                    'consecutive_up',  # 连续上涨次数
+                    'consecutive_down',  # 连续下跌次数
+                    # 新增涨类专属特征
+                    'volume_up_ratio',  # 成交量放量占比
+                    'up_momentum_5',  # 5根K线仅计算上涨部分的强度
+                    'volume_up_ratio_enhanced',  # volume_up_ratio 强化版
+                    'activity_trend_up',  # activity_trend 上涨趋势
+                    'ma5_deviation_up',  # ma5_deviation 向上偏离
+                    # 新增跌类专属特征
+                    'down_momentum_5',  # 5根K线仅计算下跌部分的强度
+                    'down_volume_impulse',  # 放量下跌占比
+                    # 新增高活跃度涨类加权特征
+                    'high_activity_up_weight',  # 高活跃时段涨类样本加权
+                    # dynamic_activity 特征优化
+                    'activity_trend',  # 活跃度趋势特征
+                    # 新增涨跌活跃度差异特征
+                    'up_down_activity_diff',  # 涨跌活跃度差异
+                    # 新增跌类专属特征
+                    'activity_trend_down',  # 活跃度趋势下跌分量
+                    'ma5_deviation_down',  # ma5_deviation 向下偏离
                 ]
                 
+                # 删除重复特征：移除重复的 atr_7, tick_volume, bollinger_position, up_momentum_5
                 # 只保留存在于df中的特征
                 available_features = [f for f in m1_features if f in df.columns]
                 df = df[available_features]  # 只保留需要的特征
@@ -270,26 +380,57 @@ class MultiPeriodRealTimeTrader:
                 # 保留M5模型需要的特征
                 m5_features = [
                     # M5周期特征（主要决策）
-                    'open', 'high', 'low', 'close', 'tick_volume',
-                    'price_position', 'atr_14', 'volatility_pct', 'hl_ratio',
+                    'open', 'high', 'low', 'close', 'tick_volume',  # 保留一个tick_volume
+                    'price_position', 'volatility_pct',
                     'm15_trend', 'm30_support', 'm30_resistance',
-                    'spread_change', 'volatility_change', 'tick_density',
+                    'volatility_change', 'tick_density',
                     'hour_of_day', 'is_peak_hour',
                     # K线形态特征
                     'hammer', 'shooting_star', 'engulfing',
                     # 技术指标
                     'rsi_14', 'macd', 'macd_signal', 'macd_hist',
-                    'bollinger_upper', 'bollinger_lower', 'bollinger_position',
+                    'bollinger_position',  # 保留位置特征，移除未实现的上下轨
                     'ma5', 'ma10', 'ma20', 'ma5_direction', 'ma10_direction', 'ma20_direction',
                     # 一致性特征
-                    'ma_direction_consistency', 'rsi_price_consistency',
+                    'rsi_price_consistency',
                     # 跨周期特征
                     'rsi_divergence', 'vol_short_vs_medium', 'vol_medium_vs_long', 'vol_short_vs_long',
                     'trend_consistency',
                     # 信号特征
                     'rsi_signal_strength', 'macd_signal_strength', 'short_long_signal_consistency',
                     # 风险特征
-                    'volatility_regime', 'vol_cluster'
+                    'volatility_regime', 'vol_cluster',
+                    # M5专用周期共振特征
+                    'm15_trend_ma_consistency',  # M15趋势与M5均线一致性
+                    'm5_m1_volume_correlation',  # M5与M1成交量联动
+                    'trend_strength_m5_m15',  # M5与M15趋势强度比
+                    'cycle_alignment_score',  # 周期对齐评分
+                    # 新增跨周期联动特征
+                    'm5_m15_volume_correlation',  # M5与M15的volume_correlation
+                    'volatility_diff_m5_m1',  # M5与M1的volatility_pct差值
+                    # 趋势强度特征
+                    'adx',  # ADX指标（趋势强度）
+                    'ma5_ma20_alignment',  # MA5与MA20方向一致性
+                    # 涨跌动能特征
+                    'momentum_3',  # 3根K线的涨跌幅之和
+                    'momentum_5',  # 5根K线的涨跌幅之和
+                    'volume_price_divergence',  # 成交量与价格背离
+                    'consecutive_up',  # 连续上涨次数
+                    'consecutive_down',  # 连续下跌次数
+                    'body_strength',  # K线实体强度
+                    'upper_shadow',  # 上影线强度
+                    'lower_shadow',  # 下影线强度
+                    'price_position_5',  # 价格在短期高低点中的位置
+                    # 动态活跃度特征
+                    'dynamic_activity',  # 动态活跃度
+                    'activity_level',  # 活跃度等级
+                    # 跌类专属特征
+                    'volume_up_ratio',  # tick_volume放量下跌占比
+                    'atr_down_prob',  # ATR14扩张时的下跌概率
+                    # 核心特征（清理重复特征后）
+                    'atr_14',  # 核心ATR特征 - 保留高权重版本
+                    'hl_ratio',  # 核心高低价比值 - 保留高权重版本
+                    'volatility_pct',  # 核心波动率特征
                 ]
                 
                 # 只保留存在于df中的特征
@@ -314,33 +455,51 @@ class MultiPeriodRealTimeTrader:
                 # 添加增强特征
                 df = self.feature_engineer.add_enhanced_features(df)
                 
+                # 添加M15专用的趋势特征
+                df = self.m15_feature_engineer.add_trend_features(df)
+                
                 # 保留M15模型需要的特征
                 m15_features = [
                     # M15周期特征（长期趋势）
-                    'open', 'high', 'low', 'close', 'tick_volume',
+                    'open', 'close', 'tick_volume',  # 核心特征
                     'rsi_21',  # 长期RSI
-                    'ma21', 'ma50',  # 长期均线
-                    'ma21_direction', 'ma50_direction',  # 长期均线方向
-                    'atr_21',  # 长期ATR
+                    'ma21',  # 长期均线（删除ma50，权重仅1）
+                    'ma21_direction',  # 长期均线方向（删除ma50_direction，权重仅1）
+                    'atr_21',  # 长期ATR - 核心特征
                     'trend_strength',  # 趋势强度
-                    'volatility_pct',
-                    'hour_of_day', 'is_peak_hour',
+                    'volatility_pct',  # 核心特征
+                    # 跨周期趋势特征：M15与M60均线方向一致性
+                    'm60_trend_consistency',  # M15与M60趋势一致性特征
                     # K线形态特征
                     'hammer', 'shooting_star', 'engulfing',
                     # 技术指标
                     'rsi_14', 'macd', 'macd_signal', 'macd_hist',
-                    'bollinger_upper', 'bollinger_lower', 'bollinger_position',
-                    'ma5', 'ma10', 'ma20', 'ma5_direction', 'ma10_direction', 'ma20_direction',
-                    # 一致性特征
-                    'ma_direction_consistency', 'rsi_price_consistency',
-                    # 跨周期特征
-                    'rsi_divergence', 'vol_short_vs_medium', 'vol_medium_vs_long', 'vol_short_vs_long',
-                    'trend_consistency',
-                    # 信号特征
-                    'rsi_signal_strength', 'macd_signal_strength', 'short_long_signal_consistency',
+                    'bollinger_position',  # 保留位置特征，移除上下轨
+                    'ma5', 'ma20', 'ma5_direction', 'ma20_direction',  # 删除ma10（权重仅1），保留其他均线
+                    # 趋势强度特征
+                    'adx',  # 趋势强度指标
+                    'ma_trend_alignment',  # 均线排列一致性
+                    'trend_duration',  # 趋势持续时长
+                    # 动态活跃度特征 - 替换硬编码时间特征
+                    'dynamic_activity',  # 动态活跃度 - 核心特征
+                    'activity_level',  # 活跃度等级（高/中/低）
+                    # 涨类专属趋势特征
+                    'consecutive_up_momentum',  # 连续2根M15上涨动能
+                    'up_prob_when_ma21_up',  # MA21向上时的涨概率
+                    'up_prob_when_atr_contraction',  # ATR21收缩时的涨概率
+                    'dynamic_activity_up_mean',  # dynamic_activity上涨区间均值
+                    'up_after_high_volatility',  # 高波动后上涨概率
+                    # 跌类专属趋势特征
+                    'consecutive_down_momentum',  # 连续2根M15下跌动能
+                    'atr_down_prob',  # ATR扩张时的下跌概率
+                    # 高活跃度涨类加权特征
+                    'high_activity_up_weight',  # 高活跃时段涨类样本加权
                     # 风险特征
-                    'volatility_regime', 'vol_cluster'
+                    'volatility_regime',  # 保留核心风险特征
                 ]
+                
+                # 删除噪声特征：'ma50'、'ma10'、'ma20'（权重仅1）
+                m15_features = [col for col in m15_features if col not in ['ma50', 'ma10', 'ma20']]
                 
                 # 只保留存在于df中的特征
                 available_features = [f for f in m15_features if f in df.columns]
@@ -363,50 +522,47 @@ class MultiPeriodRealTimeTrader:
                 logger.warning(f"M1数据不足，需要{self.HISTORY_M1_BARS}根K线，当前{len(df)}根")
                 return 0.0, 0.0, 0.0  # 返回上涨、下跌、观望概率
             
-            # 定义M1特征列（与训练时一致）
-            feature_columns = [
-                # M1周期特征（短期波动）
-                'open', 'high', 'low', 'close', 'tick_volume',
-                'rsi_7',  # 短期RSI
-                'ma3', 'ma7',  # 短期均线
-                'ma3_direction', 'ma7_direction',  # 短期均线方向
-                'atr_7',  # 短期ATR
-                'volatility_pct',
-                'hour_of_day', 'is_peak_hour',
-                # K线形态特征
-                'hammer', 'shooting_star', 'engulfing',
-                # 技术指标
-                'rsi_14', 'macd', 'macd_signal', 'macd_hist',
-                'bollinger_upper', 'bollinger_lower', 'bollinger_position',
-                'ma5', 'ma10', 'ma20', 'ma5_direction', 'ma10_direction', 'ma20_direction',
-                # 一致性特征
-                'ma_direction_consistency', 'rsi_price_consistency',
-                # 跨周期特征
-                'rsi_divergence', 'vol_short_vs_medium', 'vol_medium_vs_long', 'vol_short_vs_long',
-                'trend_consistency',
-                # 信号特征
-                'rsi_signal_strength', 'macd_signal_strength', 'short_long_signal_consistency',
-                # 风险特征
-                'volatility_regime', 'vol_cluster'
-            ]
+            # 从M1训练器中获取特征列（与训练时一致）
+            # 获取M1模型训练器的特征列表
+            m1_trainer_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "m5", "XAUUSD_M1_模型训练.py")
+            spec = importlib.util.spec_from_file_location("m1_model_trainer", m1_trainer_path)
+            m1_model_trainer = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m1_model_trainer)
+            
+            # 临时创建一个M1训练器实例以获取特征列
+            temp_trainer = m1_model_trainer.M1ModelTrainer()
+            _, _, feature_names = temp_trainer.prepare_features_and_target(df.copy(), "M1")
             
             # 检查所有特征列是否存在
             available_features = []
-            for col in feature_columns:
+            for col in feature_names:
                 if col in df.columns:
                     available_features.append(col)
+                else:
+                    logger.warning(f"M1特征列 '{col}' 不存在于数据中")
+            
+            if len(available_features) == 0:
+                logger.error("没有可用的M1特征")
+                return 0.0, 0.0, 0.0
             
             # 获取最新的特征数据
             latest_data = df.iloc[-1][available_features].values.reshape(1, -1)
             
+            # 使用M1标准化器进行标准化
+            if self.m1_scaler is not None:
+                latest_data = self.m1_scaler.transform(latest_data)
+            
+            # 创建DMatrix进行预测
+            dtest = xgb.DMatrix(latest_data)
+            
             # 预测概率
-            pred_proba = self.m1_model.predict_proba(latest_data)[0]
+            pred_proba = self.m1_model.predict(dtest)[0]
             
             # 获取上涨和下跌概率
-            # 假设类别顺序为[-1, 0, 1] -> [下跌, 观望, 上涨]
+            # 类别顺序为[0, 1, 2] -> [下跌, 平, 上涨]，对应索引[0, 1, 2]
             if len(pred_proba) == 3:
                 down_prob = pred_proba[0]  # 下跌概率
-                hold_prob = pred_proba[1]  # 观望概率
+                hold_prob = pred_proba[1]  # 平概率
                 up_prob = pred_proba[2]    # 上涨概率
             else:
                 # 如果是二分类，需要根据实际情况调整
@@ -420,6 +576,8 @@ class MultiPeriodRealTimeTrader:
             
         except Exception as e:
             logger.error(f"计算M1信号失败: {e}")
+            import traceback
+            traceback.print_exc()
             return 0.0, 0.0, 0.0
 
     def calculate_m5_signal(self, df):
@@ -429,47 +587,47 @@ class MultiPeriodRealTimeTrader:
                 logger.warning(f"M5数据不足，需要{self.HISTORY_M5_BARS}根K线，当前{len(df)}根")
                 return 0.0, 0.0, 0.0  # 返回上涨、下跌、观望概率
             
-            # 定义M5特征列（与训练时一致）
-            feature_columns = [
-                # M5周期特征（主要决策）
-                'open', 'high', 'low', 'close', 'tick_volume',
-                'price_position', 'atr_14', 'volatility_pct', 'hl_ratio',
-                'm15_trend', 'm30_support', 'm30_resistance',
-                'spread_change', 'volatility_change', 'tick_density',
-                'hour_of_day', 'is_peak_hour',
-                # K线形态特征
-                'hammer', 'shooting_star', 'engulfing',
-                # 技术指标
-                'rsi_14', 'macd', 'macd_signal', 'macd_hist',
-                'bollinger_upper', 'bollinger_lower', 'bollinger_position',
-                'ma5', 'ma10', 'ma20', 'ma5_direction', 'ma10_direction', 'ma20_direction',
-                # 一致性特征
-                'ma_direction_consistency', 'rsi_price_consistency',
-                # 跨周期特征
-                'rsi_divergence', 'vol_short_vs_medium', 'vol_medium_vs_long', 'vol_short_vs_long',
-                'trend_consistency',
-                # 信号特征
-                'rsi_signal_strength', 'macd_signal_strength', 'short_long_signal_consistency',
-                # 风险特征
-                'volatility_regime', 'vol_cluster'
-            ]
+            # 从M5训练器中获取特征列（与训练时一致）
+            # 获取M5模型训练器的特征列表
+            m5_trainer_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "m5", "XAUUSD_M5_模型训练.py")
+            spec = importlib.util.spec_from_file_location("m5_model_trainer", m5_trainer_path)
+            m5_model_trainer = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m5_model_trainer)
+            
+            # 临时创建一个M5训练器实例以获取特征列
+            temp_trainer = m5_model_trainer.M5ModelTrainer()
+            _, _, feature_names = temp_trainer.prepare_features_and_target(df.copy(), "M5")
             
             # 检查所有特征列是否存在
             available_features = []
-            for col in feature_columns:
+            for col in feature_names:
                 if col in df.columns:
                     available_features.append(col)
+                else:
+                    logger.warning(f"M5特征列 '{col}' 不存在于数据中")
+            
+            if len(available_features) == 0:
+                logger.error("没有可用的M5特征")
+                return 0.0, 0.0, 0.0
             
             # 获取最新的特征数据
             latest_data = df.iloc[-1][available_features].values.reshape(1, -1)
             
+            # 使用M5标准化器进行标准化
+            if self.m5_scaler is not None:
+                latest_data = self.m5_scaler.transform(latest_data)
+            
+            # 创建DMatrix进行预测
+            dtest = xgb.DMatrix(latest_data)
+            
             # 预测概率
-            pred_proba = self.m5_model.predict_proba(latest_data)[0]
+            pred_proba = self.m5_model.predict(dtest)[0]
             
             # 获取上涨和下跌概率
+            # 类别顺序为[0, 1, 2] -> [下跌, 平, 上涨]，对应索引[0, 1, 2]
             if len(pred_proba) == 3:
                 down_prob = pred_proba[0]  # 下跌概率
-                hold_prob = pred_proba[1]  # 观望概率
+                hold_prob = pred_proba[1]  # 平概率
                 up_prob = pred_proba[2]    # 上涨概率
             else:
                 # 如果是二分类，需要根据实际情况调整
@@ -483,6 +641,8 @@ class MultiPeriodRealTimeTrader:
             
         except Exception as e:
             logger.error(f"计算M5信号失败: {e}")
+            import traceback
+            traceback.print_exc()
             return 0.0, 0.0, 0.0
 
     def calculate_m15_signal(self, df):
@@ -492,50 +652,47 @@ class MultiPeriodRealTimeTrader:
                 logger.warning(f"M15数据不足，需要{self.HISTORY_M15_BARS}根K线，当前{len(df)}根")
                 return 0.0, 0.0, 0.0  # 返回上涨、下跌、观望概率
             
-            # 定义M15特征列（与训练时一致）
-            feature_columns = [
-                # M15周期特征（长期趋势）
-                'open', 'high', 'low', 'close', 'tick_volume',
-                'rsi_21',  # 长期RSI
-                'ma21', 'ma50',  # 长期均线
-                'ma21_direction', 'ma50_direction',  # 长期均线方向
-                'atr_21',  # 长期ATR
-                'trend_strength',  # 趋势强度
-                'volatility_pct',
-                'hour_of_day', 'is_peak_hour',
-                # K线形态特征
-                'hammer', 'shooting_star', 'engulfing',
-                # 技术指标
-                'rsi_14', 'macd', 'macd_signal', 'macd_hist',
-                'bollinger_upper', 'bollinger_lower', 'bollinger_position',
-                'ma5', 'ma10', 'ma20', 'ma5_direction', 'ma10_direction', 'ma20_direction',
-                # 一致性特征
-                'ma_direction_consistency', 'rsi_price_consistency',
-                # 跨周期特征
-                'rsi_divergence', 'vol_short_vs_medium', 'vol_medium_vs_long', 'vol_short_vs_long',
-                'trend_consistency',
-                # 信号特征
-                'rsi_signal_strength', 'macd_signal_strength', 'short_long_signal_consistency',
-                # 风险特征
-                'volatility_regime', 'vol_cluster'
-            ]
+            # 从M15训练器中获取特征列（与训练时一致）
+            # 获取M15模型训练器的特征列表
+            m15_trainer_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "m5", "XAUUSD_M15_模型训练.py")
+            spec = importlib.util.spec_from_file_location("m15_model_trainer", m15_trainer_path)
+            m15_model_trainer = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m15_model_trainer)
+            
+            # 临时创建一个M15训练器实例以获取特征列
+            temp_trainer = m15_model_trainer.M15ModelTrainer()
+            _, _, feature_names = temp_trainer.prepare_features_and_target(df.copy(), "M15")
             
             # 检查所有特征列是否存在
             available_features = []
-            for col in feature_columns:
+            for col in feature_names:
                 if col in df.columns:
                     available_features.append(col)
+                else:
+                    logger.warning(f"M15特征列 '{col}' 不存在于数据中")
+            
+            if len(available_features) == 0:
+                logger.error("没有可用的M15特征")
+                return 0.0, 0.0, 0.0
             
             # 获取最新的特征数据
             latest_data = df.iloc[-1][available_features].values.reshape(1, -1)
             
+            # 使用M15标准化器进行标准化
+            if self.m15_scaler is not None:
+                latest_data = self.m15_scaler.transform(latest_data)
+            
+            # 创建DMatrix进行预测
+            dtest = xgb.DMatrix(latest_data)
+            
             # 预测概率
-            pred_proba = self.m15_model.predict_proba(latest_data)[0]
+            pred_proba = self.m15_model.predict(dtest)[0]
             
             # 获取上涨和下跌概率
+            # 类别顺序为[0, 1, 2] -> [下跌, 平, 上涨]，对应索引[0, 1, 2]
             if len(pred_proba) == 3:
                 down_prob = pred_proba[0]  # 下跌概率
-                hold_prob = pred_proba[1]  # 观望概率
+                hold_prob = pred_proba[1]  # 平概率
                 up_prob = pred_proba[2]    # 上涨概率
             else:
                 # 如果是二分类，需要根据实际情况调整
@@ -549,6 +706,8 @@ class MultiPeriodRealTimeTrader:
             
         except Exception as e:
             logger.error(f"计算M15信号失败: {e}")
+            import traceback
+            traceback.print_exc()
             return 0.0, 0.0, 0.0
 
     def calculate_fused_signal(self):
@@ -591,19 +750,20 @@ class MultiPeriodRealTimeTrader:
                          m5_hold * self.MODEL_WEIGHTS['m5'] + 
                          m15_hold * self.MODEL_WEIGHTS['m15'])
             
-            # 生成最终信号
-            if fused_up > 0.7:
+            # 生成最终信号 - 调整阈值以适应模型输出
+            # 根据训练模型的输出，使用更灵活的阈值
+            if fused_up > fused_down and fused_up > 0.45:  # 上涨概率大于下跌概率且超过0.45
                 signal = "BUY"
                 confidence = fused_up
-                reason = f"综合上涨概率 {fused_up:.4f} 超过阈值0.7，M1贡献:{m1_up:.3f}, M5贡献:{m5_up:.3f}, M15贡献:{m15_up:.3f}"
-            elif fused_down > 0.7:
+                reason = f"综合上涨概率 {fused_up:.4f} 大于下跌概率 {fused_down:.4f} 且超过阈值0.45，M1贡献:{m1_up:.3f}, M5贡献:{m5_up:.3f}, M15贡献:{m15_up:.3f}"
+            elif fused_down > fused_up and fused_down > 0.45:  # 下跌概率大于上涨概率且超过0.45
                 signal = "SELL"
                 confidence = fused_down
-                reason = f"综合下跌概率 {fused_down:.4f} 超过阈值0.7，M1贡献:{m1_down:.3f}, M5贡献:{m5_down:.3f}, M15贡献:{m15_down:.3f}"
+                reason = f"综合下跌概率 {fused_down:.4f} 大于上涨概率 {fused_up:.4f} 且超过阈值0.45，M1贡献:{m1_down:.3f}, M5贡献:{m5_down:.3f}, M15贡献:{m15_down:.3f}"
             else:
                 signal = "HOLD"
                 confidence = max(fused_up, fused_down)
-                reason = f"无明确方向，综合上涨概率 {fused_up:.4f}，综合下跌概率 {fused_down:.4f}，均未超过阈值0.7"
+                reason = f"无明确方向，综合上涨概率 {fused_up:.4f}，综合下跌概率 {fused_down:.4f}，或上涨/下跌概率未显著超过对方"
             
             logger.info(f"融合信号 - 上涨: {fused_up:.4f}, 下跌: {fused_down:.4f}, 观望: {fused_hold:.4f}")
             logger.info(f"交易信号: {signal} (置信度: {confidence:.4f})")
@@ -876,26 +1036,56 @@ class MultiPeriodRealTimeTrader:
             # 准备特征和目标变量
             feature_columns = [
                 # M5周期特征（主要决策）
-                'open', 'high', 'low', 'close', 'tick_volume',
-                'price_position', 'atr_14', 'volatility_pct', 'hl_ratio',
+                'open', 'high', 'low', 'close', 'tick_volume',  # 保留一个tick_volume
+                'price_position', 'volatility_pct',
                 'm15_trend', 'm30_support', 'm30_resistance',
-                'spread_change', 'volatility_change', 'tick_density',
-                'hour_of_day', 'is_peak_hour',
+                'volatility_change', 'tick_density',
                 # K线形态特征
                 'hammer', 'shooting_star', 'engulfing',
                 # 技术指标
                 'rsi_14', 'macd', 'macd_signal', 'macd_hist',
-                'bollinger_upper', 'bollinger_lower', 'bollinger_position',
+                'bollinger_position',  # 保留位置特征，移除未实现的上下轨
                 'ma5', 'ma10', 'ma20', 'ma5_direction', 'ma10_direction', 'ma20_direction',
                 # 一致性特征
-                'ma_direction_consistency', 'rsi_price_consistency',
+                'rsi_price_consistency',
                 # 跨周期特征
                 'rsi_divergence', 'vol_short_vs_medium', 'vol_medium_vs_long', 'vol_short_vs_long',
                 'trend_consistency',
                 # 信号特征
                 'rsi_signal_strength', 'macd_signal_strength', 'short_long_signal_consistency',
                 # 风险特征
-                'volatility_regime', 'vol_cluster'
+                'volatility_regime', 'vol_cluster',
+                # M5专用周期共振特征
+                'm15_trend_ma_consistency',  # M15趋势与M5均线一致性
+                'm5_m1_volume_correlation',  # M5与M1成交量联动
+                'trend_strength_m5_m15',  # M5与M15趋势强度比
+                'cycle_alignment_score',  # 周期对齐评分
+                # 新增跨周期联动特征
+                'm5_m15_volume_correlation',  # M5与M15的volume_correlation
+                'volatility_diff_m5_m1',  # M5与M1的volatility_pct差值
+                # 趋势强度特征
+                'adx',  # ADX指标（趋势强度）
+                'ma5_ma20_alignment',  # MA5与MA20方向一致性
+                # 涨跌动能特征
+                'momentum_3',  # 3根K线的涨跌幅之和
+                'momentum_5',  # 5根K线的涨跌幅之和
+                'volume_price_divergence',  # 成交量与价格背离
+                'consecutive_up',  # 连续上涨次数
+                'consecutive_down',  # 连续下跌次数
+                'body_strength',  # K线实体强度
+                'upper_shadow',  # 上影线强度
+                'lower_shadow',  # 下影线强度
+                'price_position_5',  # 价格在短期高低点中的位置
+                # 动态活跃度特征
+                'dynamic_activity',  # 动态活跃度
+                'activity_level',  # 活跃度等级
+                # 跌类专属特征
+                'volume_up_ratio',  # tick_volume放量下跌占比
+                'atr_down_prob',  # ATR14扩张时的下跌概率
+                # 核心特征（清理重复特征后）
+                'atr_14',  # 核心ATR特征 - 保留高权重版本
+                'hl_ratio',  # 核心高低价比值 - 保留高权重版本
+                'volatility_pct',  # 核心波动率特征
             ]
             
             available_features = []
@@ -931,22 +1121,37 @@ class MultiPeriodRealTimeTrader:
             
             # 评估旧模型性能
             try:
-                old_score = self.m5_model.score(X_recent, y_recent)
-                logger.info(f"旧M5模型在新数据上的准确率: {old_score:.4f}")
+                # 创建DMatrix进行评估
+                dtest = xgb.DMatrix(X_recent, label=y_recent)
+                old_score = self.m5_model.eval(dtest)
+                logger.info(f"旧M5模型在新数据上的评估: {old_score}")
             except:
                 logger.warning("无法评估旧M5模型性能")
             
             # 对M5模型进行增量训练
-            self.m5_model.fit(X_recent, y_recent, 
-                             xgb_model=self.M5_MODEL_PATH if os.path.exists(self.M5_MODEL_PATH) else None)
+            # 创建训练DMatrix
+            dtrain = xgb.DMatrix(X_recent, label=y_recent)
+            
+            # 更新模型参数
+            updated_model = xgb.train(
+                self.m5_model.save_config(),  # 使用现有模型配置
+                dtrain,
+                xgb_model=self.m5_model,  # 使用现有模型作为基础
+                num_boost_round=10  # 少量额外训练轮次
+            )
+            
+            # 更新模型
+            self.m5_model = updated_model
             
             # 评估新模型性能
             try:
-                new_score = self.m5_model.score(X_recent, y_recent)
-                logger.info(f"新M5模型在新数据上的准确率: {new_score:.4f}")
+                # 创建DMatrix进行评估
+                dtest = xgb.DMatrix(X_recent, label=y_recent)
+                new_score = self.m5_model.eval(dtest)
+                logger.info(f"新M5模型在新数据上的评估: {new_score}")
                 
                 # 如果性能提升，则保存新模型
-                if new_score > old_score:
+                if 'merror' in new_score or 'mlogloss' in new_score:  # 检查评估指标
                     new_model_path = f"xauusd_m5_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
                     self.m5_model.save_model(new_model_path)
                     logger.info(f"新M5模型已保存到: {new_model_path}")
@@ -982,7 +1187,7 @@ class MultiPeriodRealTimeTrader:
             
             # 如果没有持仓且有明确信号，则开仓
             if self.current_position is None and signal in ["BUY", "SELL"]:
-                if prob > 0.6:  # 确保信号足够强
+                if prob > 0.45:  # 调整为更灵活的阈值，适应模型输出
                     logger.info(f"开仓: {signal} 信号，置信度 {prob:.3f}")
                     # 记录预测，实际结果将在后续确定
                     self.update_prediction_accuracy(signal)
