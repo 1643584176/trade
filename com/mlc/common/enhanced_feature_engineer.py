@@ -197,7 +197,12 @@ class EnhancedFeatureEngineer:
 
             # 市场状态识别 - 趋势/震荡/回调
             df['price_trend'] = df['close'].rolling(window=20).apply(lambda x: 1 if len(x) > 1 and x.iloc[-1] > x.iloc[0] else 0)
-            df['volatility_regime'] = pd.cut(df['volatility_pct'], bins=3, labels=['low', 'medium', 'high']).astype('category').cat.codes
+            
+            # 添加安全检查，防止volatility_pct全部为NaN导致pd.cut错误
+            if df['volatility_pct'].notna().any():
+                df['volatility_regime'] = pd.cut(df['volatility_pct'], bins=3, labels=['low', 'medium', 'high']).astype('category').cat.codes
+            else:
+                df['volatility_regime'] = 0  # 默认值
             
             # 计算价格与移动平均线的距离来判断趋势强度
             df['price_ma_distance'] = abs(df['close'] - df['ma20']) / df['close']

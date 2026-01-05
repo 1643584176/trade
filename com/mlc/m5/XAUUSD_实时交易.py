@@ -51,8 +51,8 @@ CONFIG = {
         "m15": 900
     },
     "LOG_LEVEL": "INFO",
-    "MAX_RETRIES": 3,
-    "RETRY_INTERVAL": 1
+    "MAX_RETRIES": 1,
+    "RETRY_INTERVAL": 0
 }
 
 try:
@@ -145,8 +145,8 @@ class MultiPeriodRealTimeTrader:
         self.MAX_THRESHOLD = CONFIG["SIGNAL_THRESHOLD"]["max"]
 
         # 重试配置
-        self.MAX_RETRIES = CONFIG["MAX_RETRIES"]
-        self.RETRY_INTERVAL = CONFIG["RETRY_INTERVAL"]
+        self.MAX_RETRIES = 1
+        self.RETRY_INTERVAL = 0
 
         # 交易状态
         self.current_position = None
@@ -292,24 +292,19 @@ class MultiPeriodRealTimeTrader:
             f"⚖️ 模型权重 - M1: {self.MODEL_WEIGHTS['m1']:.2f}, M5: {self.MODEL_WEIGHTS['m5']:.2f}, M15: {self.MODEL_WEIGHTS['m15']:.2f}")
 
     def init_mt5_connection(self):
-        """初始化MT5连接（带重试）"""
-        for retry in range(self.MAX_RETRIES):
-            if mt5.initialize():
-                # 确保交易品种被选中
-                if mt5.symbol_select(self.SYMBOL, True):
-                    return
-                else:
-                    logger.error(f"❌ 无法选择交易品种 {self.SYMBOL}")
-            else:
-                logger.error(f"❌ MT5初始化失败（重试{retry + 1}/{self.MAX_RETRIES}）: {mt5.last_error()}")
-
-            if retry < self.MAX_RETRIES - 1:
-                time.sleep(self.RETRY_INTERVAL)
-
-        raise Exception(f"❌ MT5连接失败，已重试{self.MAX_RETRIES}次")
+        """初始化MT5连接"""
+        if not mt5.initialize():
+            raise Exception(f"❌ MT5连接失败: {mt5.last_error()}")
+        
+        # 确保交易品种被选中
+        if not mt5.symbol_select(self.SYMBOL, True):
+            logger.error(f"❌ 无法选择交易品种 {self.SYMBOL}")
+            raise Exception(f"❌ 无法选择交易品种 {self.SYMBOL}")
+        
+        logger.info("✅ MT5连接初始化成功")
 
     def load_models(self):
-        """加载所有模型（带重试）"""
+        """加载所有模型"""
         models = {
             'm1': (self.M1_MODEL_PATH, 'M1'),
             'm5': (self.M5_MODEL_PATH, 'M5'),
@@ -318,18 +313,14 @@ class MultiPeriodRealTimeTrader:
 
         self.models = {}
         for key, (path, name) in models.items():
-            for retry in range(self.MAX_RETRIES):
-                try:
-                    model = xgb.Booster()
-                    model.load_model(path)
-                    self.models[key] = model
-                    logger.debug(f"✅ {name}模型已从 {path} 加载")
-                    break
-                except Exception as e:
-                    logger.error(f"❌ 加载{name}模型失败（重试{retry + 1}/{self.MAX_RETRIES}）: {e}")
-                    if retry == self.MAX_RETRIES - 1:
-                        raise e
-                    time.sleep(self.RETRY_INTERVAL)
+            try:
+                model = xgb.Booster()
+                model.load_model(path)
+                self.models[key] = model
+                logger.debug(f"✅ {name}模型已从 {path} 加载")
+            except Exception as e:
+                logger.error(f"❌ 加载{name}模型失败: {e}")
+                raise e
 
     def load_scalers(self):
         """加载特征标准化器"""
