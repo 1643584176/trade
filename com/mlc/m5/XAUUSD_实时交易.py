@@ -72,15 +72,33 @@ except ImportError:
             return df
 
 # 配置日志
-logging.basicConfig(
-    level=getattr(logging, CONFIG["LOG_LEVEL"]),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('xauusd_multi_period_trading.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# 由于项目中多处配置日志，使用更可靠的方式确保日志文件被创建
+logger = logging.getLogger('xauusd_trader')  # 使用特定的logger名称
+logger.setLevel(getattr(logging, CONFIG["LOG_LEVEL"]))
+
+# 清除已有的处理器，避免重复日志
+if logger.hasHandlers():
+    logger.handlers.clear()
+
+# 创建格式化器
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# 创建文件处理器
+file_handler = logging.FileHandler('xauusd_multi_period_trading.log', encoding='utf-8')
+file_handler.setLevel(getattr(logging, CONFIG["LOG_LEVEL"]))
+file_handler.setFormatter(formatter)
+
+# 创建控制台处理器
+console_handler = logging.StreamHandler()
+console_handler.setLevel(getattr(logging, CONFIG["LOG_LEVEL"]))
+console_handler.setFormatter(formatter)
+
+# 添加处理器到logger
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# 禁止向上级logger传播，避免重复输出
+logger.propagate = False
 
 
 class MultiPeriodRealTimeTrader:
@@ -650,7 +668,7 @@ class MultiPeriodRealTimeTrader:
             try:
                 # 记录尝试获取的数据周期
                 timeframe_name = {mt5.TIMEFRAME_M1: 'M1', mt5.TIMEFRAME_M5: 'M5', mt5.TIMEFRAME_M15: 'M15'}.get(timeframe, str(timeframe))
-                logger.info(f"📊 开始获取{timeframe_name}数据，K线索取数量: {bars_count + 1}")
+                logger.debug(f"📊 开始获取{timeframe_name}数据，K线索取数量: {bars_count + 1}")
                 
                 # 从MT5获取实时数据，获取额外一根K线以确保我们有足够数据
                 rates = mt5.copy_rates_from_pos(self.SYMBOL, timeframe, 0, bars_count + 1)
@@ -1193,7 +1211,7 @@ class MultiPeriodRealTimeTrader:
                 # 如果总和为0，设置为默认值
                 up_prob, down_prob, hold_prob = 0.0, 0.0, 1.0
 
-            logger.info(
+            logger.debug(
                 f"📊 {period_key.upper()}周期预测概率 - 上涨: {up_prob:.4f}, 下跌: {down_prob:.4f}, 观望: {hold_prob:.4f}")
 
             return up_prob, down_prob, hold_prob
@@ -1216,6 +1234,9 @@ class MultiPeriodRealTimeTrader:
             m1_up, m1_down, m1_hold = self.calculate_signal(data['m1'], 'm1')
             m5_up, m5_down, m5_hold = self.calculate_signal(data['m5'], 'm5')
             m15_up, m15_down, m15_hold = self.calculate_signal(data['m15'], 'm15')
+            
+            # 输出简化的多周期预测概率（一行显示）
+            logger.info(f"📊 多周期预测 - M1(涨{m1_up:.4f}/跌{m1_down:.4f}/观{m1_hold:.4f}) | M5(涨{m5_up:.4f}/跌{m5_down:.4f}/观{m5_hold:.4f}) | M15(涨{m15_up:.4f}/跌{m15_down:.4f}/观{m15_hold:.4f})")
 
             # 应用权重融合信号
             fused_up = (m1_up * self.MODEL_WEIGHTS['m1'] +
@@ -1249,7 +1270,7 @@ class MultiPeriodRealTimeTrader:
                 confidence = max(fused_up, fused_down)
                 reason = f"无明确方向，动态阈值{dynamic_threshold:.2f}"
 
-            logger.info(f"🔍 融合信号 - 上涨: {fused_up:.4f}, 下跌: {fused_down:.4f}, 阈值: {dynamic_threshold:.2f}")
+            logger.debug(f"🔍 融合信号 - 上涨: {fused_up:.4f}, 下跌: {fused_down:.4f}, 阈值: {dynamic_threshold:.2f}")
             logger.info(f"📢 交易信号: {signal} (置信度: {confidence:.4f}) - {reason}")
 
             return signal, confidence
@@ -1865,10 +1886,11 @@ class MultiPeriodRealTimeTrader:
         current_kline_time_5 = df5.iloc[-1]['time']
         current_kline_time_15 = df15.iloc[-1]['time']
         # 打印并验证M1、M5、M15各周期最新K线的时间戳
-        logger.info(f"📅 最新M1 K线时间: {current_kline_time_1} " )
-        logger.info(f"📅 最新M5 K线时间: {current_kline_time_5} ")
-        logger.info(f"📅 最新M15 K线时间: {current_kline_time_15} ")
-
+        logging.info(
+            f"📅 最新M1 K线时间: {current_kline_time_1} | "
+            f"📅 最新M5 K线时间: {current_kline_time_5} | "
+            f"📅 最新M15 K线时间: {current_kline_time_15}"
+        )
         return True
 
 

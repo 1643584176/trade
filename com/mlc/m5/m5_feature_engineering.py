@@ -100,7 +100,7 @@ class M5FeatureEngineer:
             df['ma20_direction'] = np.where(df['ma20'] > df['ma20'].shift(), 1, 
                                            np.where(df['ma20'] < df['ma20'].shift(), -1, 0))
             
-            logger.info("核心特征添加完成")
+            logger.debug("核心特征添加完成")
             return df
 
         except Exception as e:
@@ -213,7 +213,7 @@ class M5FeatureEngineer:
             df['low_5'] = df['low'].rolling(window=5).min()
             df['price_position_5'] = (df['close'] - df['low_5']) / (df['high_5'] - df['low_5'] + 1e-8)  # 防止除零
             
-            logger.info("增强特征添加完成")
+            logger.debug("增强特征添加完成")
             return df
 
         except Exception as e:
