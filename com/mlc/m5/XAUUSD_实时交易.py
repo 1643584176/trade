@@ -1238,40 +1238,38 @@ class MultiPeriodRealTimeTrader:
             # 输出简化的多周期预测概率（一行显示）
             logger.info(f"📊 多周期预测 - M1(涨{m1_up:.4f}/跌{m1_down:.4f}/观{m1_hold:.4f}) | M5(涨{m5_up:.4f}/跌{m5_down:.4f}/观{m5_hold:.4f}) | M15(涨{m15_up:.4f}/跌{m15_down:.4f}/观{m15_hold:.4f})")
 
-            # 应用权重融合信号
-            fused_up = (m1_up * self.MODEL_WEIGHTS['m1'] +
-                        m5_up * self.MODEL_WEIGHTS['m5'] +
-                        m15_up * self.MODEL_WEIGHTS['m15'])
-
-            fused_down = (m1_down * self.MODEL_WEIGHTS['m1'] +
-                          m5_down * self.MODEL_WEIGHTS['m5'] +
-                          m15_down * self.MODEL_WEIGHTS['m15'])
-
-            fused_hold = (m1_hold * self.MODEL_WEIGHTS['m1'] +
-                          m5_hold * self.MODEL_WEIGHTS['m5'] +
-                          m15_hold * self.MODEL_WEIGHTS['m15'])
-
-            # 动态调整阈值（基于近期准确率）
-            current_accuracy = self.get_recent_accuracy()
-            dynamic_threshold = max(self.MIN_THRESHOLD,
-                                    min(self.MAX_THRESHOLD, self.BASE_THRESHOLD - (current_accuracy - 0.5) * 0.2))
-
-            # 生成最终信号
-            if fused_up > dynamic_threshold:
+            # 根据您的新策略计算综合信号
+            # 规则：如果涨 > 跌，则为正信号；如果跌 > 涨，则为负信号
+            # M1: 如果涨 > 跌为 +0.15，否则为 -0.15
+            # M5: 如果涨 > 跌为 +0.55，否则为 -0.55
+            # M15: 如果涨 > 跌为 +0.30，否则为 -0.30
+            
+            m1_signal = 0.15 if m1_up > m1_down else -0.15
+            m5_signal = 0.55 if m5_up > m5_down else -0.55
+            m15_signal = 0.30 if m15_up > m15_down else -0.30
+            
+            # 综合信号 = 各周期信号之和
+            total_signal = m1_signal + m5_signal + m15_signal
+            
+            # 根据综合信号判断交易方向
+            if total_signal > 0.3:
                 signal = "BUY"
-                confidence = fused_up
-                reason = f"综合上涨概率 {fused_up:.4f} 超过动态阈值{dynamic_threshold:.2f}"
-            elif fused_down > dynamic_threshold:
+                confidence = abs(total_signal)
+            elif total_signal < -0.3:
                 signal = "SELL"
-                confidence = fused_down
-                reason = f"综合下跌概率 {fused_down:.4f} 超过动态阈值{dynamic_threshold:.2f}"
+                confidence = abs(total_signal)
             else:
                 signal = "HOLD"
-                confidence = max(fused_up, fused_down)
-                reason = f"无明确方向，动态阈值{dynamic_threshold:.2f}"
+                confidence = abs(total_signal)
 
-            logger.debug(f"🔍 融合信号 - 上涨: {fused_up:.4f}, 下跌: {fused_down:.4f}, 阈值: {dynamic_threshold:.2f}")
-            logger.info(f"📢 交易信号: {signal} (置信度: {confidence:.4f}) - {reason}")
+            logger.info(f"📈 新策略信号 - M1贡献: {m1_signal:+.2f}, M5贡献: {m5_signal:+.2f}, M15贡献: {m15_signal:+.2f}, 综合信号: {total_signal:.2f}")
+            
+            if signal == "BUY":
+                logger.info(f"💡 交易信号: {signal} (置信度: {confidence:.4f}) - 综合信号 {total_signal:.2f} > 0.3")
+            elif signal == "SELL":
+                logger.info(f"💡 交易信号: {signal} (置信度: {confidence:.4f}) - 综合信号 {total_signal:.2f} < -0.3")
+            else:
+                logger.info(f"💡 交易信号: {signal} (置信度: {confidence:.4f}) - 综合信号 {total_signal:.2f} 在阈值范围内，无明确方向")
 
             return signal, confidence
 
@@ -1297,27 +1295,65 @@ class MultiPeriodRealTimeTrader:
             else:
                 vol_coeff = 1.0
 
-            # 计算止损止盈点位（XAUUSD 1点=0.1美金）
-            stop_loss_points = atr * self.ATR_STOP_LOSS * vol_coeff * 10
-            take_profit_points = atr * self.ATR_TAKE_PROFIT * vol_coeff * 10
+            # 计算止损止盈点位（基于ATR的动态计算）
+            base_stop_loss_points = atr * self.ATR_STOP_LOSS * vol_coeff
+            base_take_profit_points = atr * self.ATR_TAKE_PROFIT * vol_coeff
+            
+            # 使用ATR计算的值，不做最小值限制
+            stop_loss_points = base_stop_loss_points
+            take_profit_points = base_take_profit_points
 
             # 转换为价格
+            # ATR值已经是价格单位，直接使用
             if signal_type == "BUY":
-                sl = entry_price - stop_loss_points / 100
-                tp = entry_price + take_profit_points / 100
+                sl = entry_price - stop_loss_points
+                tp = entry_price + take_profit_points
             else:
-                sl = entry_price + stop_loss_points / 100
-                tp = entry_price - take_profit_points / 100
+                sl = entry_price + stop_loss_points
+                tp = entry_price - take_profit_points
+                
+            # 确保价格精度符合XAUUSD规格（小数点后5位，最小变动单位为0.01）
+            symbol_info = mt5.symbol_info(self.SYMBOL)
+            if symbol_info is not None:
+                point = symbol_info.point
+                digits = symbol_info.digits
+            else:
+                point = 0.01  # 默认点位
+                digits = 5    # 默认小数位数
+            
+            # 将止损止盈价格舍入到合适的小数位数
+            sl = round(sl / point) * point
+            tp = round(tp / point) * point
 
-            # 价格合法性校验
+            # 价格合法性校验 - 确保止损/止盈在合理范围内
             tick = mt5.symbol_info_tick(self.SYMBOL)
             if tick:
-                if signal_type == "BUY":
-                    sl = max(sl, tick.bid * 0.99)  # 止损不低于当前价格的99%
-                    tp = min(tp, tick.ask * 1.01)  # 止盈不高于当前价格的101%
+                # 获取最小价格变动单位
+                if symbol_info is not None:
+                    min_stop_distance = max(point * 100, 0.05)  # 最小止损距离设为100个点或0.05，取较大值
                 else:
-                    sl = min(sl, tick.ask * 1.01)
-                    tp = max(tp, tick.bid * 0.99)
+                    min_stop_distance = 0.05  # 默认最小止损距离
+                
+                if signal_type == "BUY":
+                    # 对于做多，止损必须低于入场价，止盈必须高于入场价
+                    sl = min(sl, entry_price - min_stop_distance)  # 确保止损至少比入场价低一定距离
+                    tp = max(tp, entry_price + min_stop_distance)  # 确保止盈至少比入场价高一定距离
+                else:
+                    # 对于做空，止损必须高于入场价，止盈必须低于入场价
+                    sl = max(sl, entry_price + min_stop_distance)  # 确保止损至少比入场价高一定距离
+                    tp = min(tp, entry_price - min_stop_distance)  # 确保止盈至少比入场价低一定距离
+                    
+                # 确保止损和止盈价格不与当前市场价格过于接近
+                if signal_type == "BUY":
+                    sl = min(sl, tick.bid - min_stop_distance)  # 止损不能高于bid价
+                    tp = max(tp, tick.ask + min_stop_distance)  # 止盈不能低于ask价
+                else:
+                    sl = max(sl, tick.ask + min_stop_distance)  # 止损不能低于ask价
+                    tp = min(tp, tick.bid - min_stop_distance)  # 止盈不能高于bid价
+                    
+                # 最后再次确保价格精度
+                sl = round(sl / point) * point
+                tp = round(tp / point) * point
 
             logger.info(f"🎯 动态止盈止损计算 - ATR: {atr:.4f}, 波动率系数: {vol_coeff:.2f}")
             logger.info(f"🎯 {signal_type} - 止损: {sl:.5f}, 止盈: {tp:.5f}")
@@ -1326,9 +1362,9 @@ class MultiPeriodRealTimeTrader:
 
         except Exception as e:
             logger.error(f"❌ 计算动态止盈止损失败: {e}")
-            # 兜底方案
-            sl = entry_price - 6 if signal_type == "BUY" else entry_price + 6
-            tp = entry_price + 10 if signal_type == "BUY" else entry_price - 10
+            # 兜底方案 - 使用更合理的止损止盈距离
+            sl = entry_price - 0.500 if signal_type == "BUY" else entry_price + 0.500  # 500点止损
+            tp = entry_price + 0.750 if signal_type == "BUY" else entry_price - 0.750  # 750点止盈
             return sl, tp
 
     def place_order(self, signal):
@@ -1359,8 +1395,8 @@ class MultiPeriodRealTimeTrader:
                     sl, tp = self.calculate_dynamic_stop_take(price, signal, m5_data)
                 else:
                     # 兜底方案
-                    sl = price - 6 if signal == "BUY" else price + 6
-                    tp = price + 10 if signal == "BUY" else price - 10
+                    sl = price - 0.100 if signal == "BUY" else price + 0.100  # 100点止损
+                    tp = price + 0.150 if signal == "BUY" else price - 0.150  # 150点止盈
 
                 # 准备订单请求
                 request = {
@@ -1900,12 +1936,19 @@ class MultiPeriodRealTimeTrader:
         self.last_m5_time = None
         logger.info("🚀 开始多周期实时交易循环")
         
-        # 首次运行数据新鲜度保障 - 等待最新的已完成K线
+        # 首次运行数据新鲜度保障 - 等待最新的已完成K线（所有周期）
         first_run = True
         while first_run:
+            # 获取所有周期的最新K线数据
+            m1_rates = mt5.copy_rates_from_pos(self.SYMBOL, mt5.TIMEFRAME_M1, 0, 1)
             m5_rates = mt5.copy_rates_from_pos(self.SYMBOL, mt5.TIMEFRAME_M5, 0, 1)
-            if len(m5_rates) > 0:
+            m15_rates = mt5.copy_rates_from_pos(self.SYMBOL, mt5.TIMEFRAME_M15, 0, 1)
+            
+            if len(m1_rates) > 0 and len(m5_rates) > 0 and len(m15_rates) > 0:
+                current_m1_time = datetime.fromtimestamp(m1_rates[0]['time'])
                 current_m5_time = datetime.fromtimestamp(m5_rates[0]['time'])
+                current_m15_time = datetime.fromtimestamp(m15_rates[0]['time'])
+                
                 # 获取XAUUSD市场数据时间，严格遵守时间源使用规范
                 current_tick = mt5.symbol_info_tick(self.SYMBOL)
                 if current_tick:
@@ -1915,15 +1958,22 @@ class MultiPeriodRealTimeTrader:
                     logger.error("❌ 无法获取XAUUSD市场时间，严格禁止使用本地时间")
                     raise Exception("无法获取XAUUSD市场数据时间")
                 
-                time_diff = abs((current_time - current_m5_time).total_seconds())
+                # 计算每个周期K线与当前时间的差异
+                m1_time_diff = abs((current_time - current_m1_time).total_seconds())
+                m5_time_diff = abs((current_time - current_m5_time).total_seconds())
+                m15_time_diff = abs((current_time - current_m15_time).total_seconds())
                 
-                # 如果最新K线时间与当前时间相差超过15分钟，等待并重新获取
-                if time_diff > 900:  # 15分钟 = 900秒
-                    logger.info(f"📅 首次运行：最新K线时间({current_m5_time})与服务器时间({current_time})相差{time_diff/60:.1f}分钟，等待数据更新...")
+                # 检查所有周期的K线时间是否都在合理范围内
+                max_time_diff = 900  # 15分钟 = 900秒
+                
+                if m1_time_diff > max_time_diff or m5_time_diff > max_time_diff or m15_time_diff > max_time_diff:
+                    logger.info(f"📅 首次运行：最新M1 K线时间: {current_m1_time} |  最新M5 K线时间: {current_m5_time} |  最新M15 K线时间: {current_m15_time}")
+                    logger.info(f"📅 首次运行：K线时间与服务器时间({current_time})差异过大，等待数据更新...")
                     time.sleep(30)  # 等待30秒后重新检查
                     continue
                 else:
-                    logger.info(f"📅 首次运行：K线数据新鲜度正常，开始交易")
+                    logger.info(f"📅 首次运行：所有周期K线数据新鲜度正常，开始交易")
+                    logger.info(f"📊 最新M1 K线时间: {current_m1_time.strftime('%Y-%m-%d %H:%M:%S')} |  最新M5 K线时间: {current_m5_time.strftime('%Y-%m-%d %H:%M:%S')} |  最新M15 K线时间: {current_m15_time.strftime('%Y-%m-%d %H:%M:%S')}")
                     self.last_m5_time = current_m5_time
                     break
             else:
