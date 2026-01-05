@@ -360,6 +360,9 @@ class M5ModelTrainer(BaseModelTrainer):
         X = scaler.fit_transform(X)
         print(f"特征已进行Z-score标准化")
         
+        # 保存特征名称到标准化器，以便后续推理时使用
+        scaler.feature_names_in_ = np.array(feature_names)
+        
         # 使用时间序列分割，确保训练集和测试集之间没有时间重叠
         split_idx = int(len(X) * self.config.TRAIN_TEST_SPLIT)
         X_train, X_test = X[:split_idx], X[split_idx:]
@@ -655,6 +658,13 @@ class M5ModelTrainer(BaseModelTrainer):
             pickle.dump(scaler, f)
         print(f"模型已保存至: {self.config.MODEL_SAVE_PATH}")
         print(f"标准化器已保存至: {self.config.SCALER_SAVE_PATH}")
+                
+        # 生成并保存标签映射文件
+        label_mapping = {-1: 0, 0: 1, 1: 2}  # 将原始标签(-1,0,1)映射到编码(0,1,2)
+        label_mapping_path = "m5_label_mapping.pkl"
+        with open(label_mapping_path, 'wb') as f:
+            pickle.dump(label_mapping, f)
+        print(f"标签映射已保存至: {label_mapping_path}")
         
         return model, feature_names
     

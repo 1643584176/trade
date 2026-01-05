@@ -46,8 +46,14 @@ class M5FeatureEngineer:
             # 波动率特征
             df['volatility_pct'] = df['close'].pct_change().rolling(window=14).std() * np.sqrt(252)
             
-            # 时间特征
-            df['hour_of_day'] = df.index.hour
+            # 时间特征 - 检查是否存在time列
+            if 'time' in df.columns:
+                # 如果存在time列，使用time列的时间信息
+                time_series = pd.to_datetime(df['time'])
+                df['hour_of_day'] = time_series.dt.hour  # 使用 .dt 访问器获取小时
+            else:
+                # 如果没有time列，使用索引的时间信息
+                df['hour_of_day'] = df.index.hour
             df['is_peak_hour'] = ((df['hour_of_day'] >= 13) & (df['hour_of_day'] <= 20)).astype(int)
             
             # K线形态特征

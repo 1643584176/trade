@@ -20,7 +20,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.
 
 # 动态导入特征工程模块
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-feature_engineering_path = os.path.join(project_root, 'mlc', 'common', 'm5_feature_engineering.py')
+feature_engineering_path = os.path.join(project_root, 'mlc', 'm5', 'm5_feature_engineering.py')
 spec = importlib.util.spec_from_file_location("m5_feature_engineering", feature_engineering_path)
 m5_feature_engineering = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m5_feature_engineering)

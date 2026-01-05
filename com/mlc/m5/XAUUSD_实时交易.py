@@ -157,11 +157,6 @@ class MultiPeriodRealTimeTrader:
                 'rsi_14', 'macd', 'macd_hist',
                 'bollinger_position',
                 'ma5', 'ma10', 'ma20', 'ma10_direction', 'ma20_direction',
-                'rsi_price_consistency',
-                'rsi_divergence', 'vol_short_vs_medium', 'vol_medium_vs_long', 'vol_short_vs_long',
-                'trend_consistency',
-                'rsi_signal_strength', 'short_long_signal_consistency',
-                'volatility_regime', 'vol_cluster',
                 'tick_vol_zscore',
                 'up_down_count_10',
                 'hl_spread_zscore',
@@ -190,7 +185,7 @@ class MultiPeriodRealTimeTrader:
                 'activity_trend',
                 'up_down_activity_diff',
                 'activity_trend_down',
-                'ma5_deviation_down',
+                'ma5_deviation_down'
             ],
             'm5': [
                 'open', 'high', 'low', 'close', 'tick_volume',
@@ -256,7 +251,6 @@ class MultiPeriodRealTimeTrader:
                 'consecutive_down_momentum',
                 'atr_down_prob',
                 'high_activity_up_weight',
-                'volatility_regime',
             ]
         }
 
@@ -311,7 +305,7 @@ class MultiPeriodRealTimeTrader:
                     model = xgb.Booster()
                     model.load_model(path)
                     self.models[key] = model
-                    logger.info(f"✅ {name}模型已从 {path} 加载")
+                    logger.debug(f"✅ {name}模型已从 {path} 加载")
                     break
                 except Exception as e:
                     logger.error(f"❌ 加载{name}模型失败（重试{retry + 1}/{self.MAX_RETRIES}）: {e}")
@@ -333,7 +327,7 @@ class MultiPeriodRealTimeTrader:
                 if os.path.exists(path):
                     with open(path, 'rb') as f:
                         self.scalers[key] = pickle.load(f)
-                    logger.info(f"✅ {key}标准化器已加载")
+                    logger.debug(f"✅ {key}标准化器已加载")
                 else:
                     self.scalers[key] = None
                     logger.warning(f"⚠️ {key}标准化器文件不存在: {path}")
@@ -355,7 +349,7 @@ class MultiPeriodRealTimeTrader:
                 if os.path.exists(path):
                     with open(path, 'rb') as f:
                         self.label_mappings[key] = pickle.load(f)
-                    logger.info(f"✅ {key}标签映射已加载")
+                    logger.debug(f"✅ {key}标签映射已加载")
                 else:
                     # 默认映射
                     self.label_mappings[key] = {-1: 0, 0: 1, 1: 2}
@@ -463,33 +457,166 @@ class MultiPeriodRealTimeTrader:
         return df
 
     def add_micro_features(self, df):
-        """添加M1微观特征（简化版）"""
-        df['tick_vol_zscore'] = (df['tick_volume'] - df['tick_volume'].rolling(10).mean()) / (
-                    df['tick_volume'].rolling(10).std() + 1e-8)
-        df['volatility_intensity'] = (df['high'] - df['low']) / df['close'] * 100
-        df['ma5_deviation'] = (df['close'] - df['close'].rolling(5).mean()) / df['close'] * 100
+        """为M1数据添加完整的微观交易特征"""
+        # Tick成交量脉冲特征
+        df['tick_vol_zscore'] = (df['tick_volume'] - df['tick_volume'].rolling(window=10).mean()) / df['tick_volume'].rolling(window=10).std()
+        df['tick_vol_zscore'] = df['tick_vol_zscore'].fillna(0)
+        
+        # 成交量脉冲特征（当前成交量 / 前3根均值，更适合M1超短期周期）
+        df['volume_impulse'] = df['tick_volume'] / df['tick_volume'].rolling(window=3).mean()
+        df['volume_impulse'] = df['volume_impulse'].fillna(1.0)  # 用1.0填充初始值
+        
+        # 涨跌延续性特征（连续2根M1的涨跌幅方向是否一致）
+        df['price_change'] = df['close'].pct_change()
+        df['price_direction'] = np.where(df['price_change'] > 0, 1, np.where(df['price_change'] < 0, -1, 0))
+        df['price_direction_consistency'] = (df['price_direction'] == df['price_direction'].shift(1)).astype(int)
+        
+        # 1分钟内涨跌次数特征（通过价格变化方向统计）
+        df['price_change'] = df['close'].diff()
+        df['price_direction'] = np.where(df['price_change'] > 0, 1, np.where(df['price_change'] < 0, -1, 0))
+        df['up_down_count_10'] = df['price_direction'].rolling(window=10).sum().abs()
+        
+        # 盘口买卖价差特征（通过高低价差异近似）
+        df['high_low_spread'] = (df['high'] - df['low']) / df['close']
+        df['hl_spread_zscore'] = (df['high_low_spread'] - df['high_low_spread'].rolling(window=20).mean()) / df['high_low_spread'].rolling(window=20).std()
+        df['hl_spread_zscore'] = df['hl_spread_zscore'].fillna(0)
+        
+        # 价格波动强度特征
+        df['volatility_intensity'] = abs(df['close'] - df['open']) / df['close']
+        
+        # 短期趋势强度（基于移动平均偏离度）
+        df['ma5_deviation'] = abs(df['close'] - df['close'].rolling(window=5).mean()) / df['close']
+        df['ma5_trend_strength'] = (df['close'] - df['close'].rolling(window=5).mean()) / df['close']
+        
+        # 清理可能的无穷大值
+        df = df.replace([np.inf, -np.inf], np.nan)
+        df = df.fillna(method='ffill').fillna(method='bfill')
+        
+        # 更新dynamic_activity特征：保留 "最近 5 根 M1 平均活跃度"，新增 "涨 / 跌活跃度差异" 特征
+        df['volatility_5m'] = df['close'].pct_change().rolling(window=5).std()  # 5分钟波动率
+        df['volatility_60m_avg'] = df['volatility_5m'].rolling(window=12).mean()  # 60分钟（12个5分钟）平均波动率
+        df['dynamic_activity_raw'] = df['volatility_5m'] / (df['volatility_60m_avg'] + 1e-8)  # 防止除零
+        df['dynamic_activity'] = df['dynamic_activity_raw'].rolling(window=5).mean()  # 最近5根M1平均活跃度
+        
+        # 新增"涨/跌活跃度差异"特征
+        df['price_change_direction'] = np.where(df['close'] > df['open'], 1, np.where(df['close'] < df['open'], -1, 0))
+        df['up_activity'] = df['dynamic_activity_raw'] * (df['price_change_direction'] == 1).astype(int)  # 上涨时活跃度
+        df['down_activity'] = df['dynamic_activity_raw'] * (df['price_change_direction'] == -1).astype(int)  # 下跌时活跃度
+        df['up_down_activity_diff'] = df['up_activity'].rolling(window=5).mean() - df['down_activity'].rolling(window=5).mean()  # 涨跌活跃度差异
+        
+        df['high_activity'] = (df['dynamic_activity'] > 1.2).astype(int)  # 高活跃度标记
+        
+        # 对高活跃时段的涨类样本额外加权（1.1），帮助模型识别高波动下的上涨信号
+        df['high_activity_up_weight'] = df['high_activity'] * (df['price_change'] > 0).astype(int) * 1.1
+        
+        # 新增涨类动能特征（涨类专属特征补充）
+        # 连续3根M1涨跌幅之和（仅计算上涨）
+        df['price_change'] = df['close'].pct_change()
+        df['up_momentum_3'] = df['price_change'].rolling(window=3).apply(lambda x: sum([i for i in x if i > 0]), raw=True)  # 仅计算上涨部分
+        df['up_momentum_3'] = df['up_momentum_3'].fillna(0)
+        
+        # volume_up_ratio 强化版
+        df['volume_up_ratio_enhanced'] = df['tick_volume'] / df['tick_volume'].rolling(window=10).mean()  # 成交量相对均值的比值
+        df['volume_up_impulse_enhanced'] = df['volume_up_ratio_enhanced'] * (df['price_change'] > 0).astype(int)  # 放量上涨占比
+        
+        # activity_trend 上涨趋势
+        df['activity_trend_up'] = df['dynamic_activity'] - df['dynamic_activity'].shift(5)  # 当前活跃度 - 前5根平均活跃度
+        df['activity_trend_up'] = df['activity_trend_up'].fillna(0)
+        
+        # ma5_deviation 向上偏离
+        df['ma5_deviation_up'] = np.where(df['ma5_trend_strength'] > 0, df['ma5_deviation'], 0)  # 仅当趋势向上时考虑偏离度
+        
+        # 强化跌类动能特征：连续3根M1下跌动能 + 跌时成交量占比
+        df['down_momentum_3'] = df['price_change'].rolling(window=3).apply(lambda x: abs(sum([i for i in x if i < 0])), raw=True)  # 仅计算下跌部分
+        df['down_momentum_3'] = df['down_momentum_3'].fillna(0)
+        
+        # 跌时成交量占比
+        df['price_direction'] = np.where(df['price_change'] < 0, 1, 0)  # 价格下跌标记
+        df['down_volume_ratio'] = df['tick_volume'] * df['price_direction']  # 跌时成交量
+        df['down_volume_ratio'] = df['down_volume_ratio'].rolling(window=10).sum() / df['tick_volume'].rolling(window=10).sum()  # 跌时成交量占比
+        df['down_volume_ratio'] = df['down_volume_ratio'].fillna(0)
+        
+        # 新增涨类专属特征：volume_impulse 放量上涨占比
+        df['volume_up_ratio'] = df['tick_volume'] / df['tick_volume'].rolling(window=10).mean()  # 成交量相对均值的比值
+        df['up_volume_impulse'] = df['volume_up_ratio'] * (df['price_change'] > 0).astype(int)  # 放量上涨占比
+        
+        # 新增涨类专属特征：momentum_5 上涨强度
+        df['up_momentum_5'] = df['price_change'].rolling(window=5).apply(lambda x: sum([i for i in x if i > 0]), raw=True)  # 5根K线仅计算上涨部分
+        df['up_momentum_5'] = df['up_momentum_5'].fillna(0)
+        
+        # 新增跌类专属特征：down_momentum_5
+        df['down_momentum_5'] = df['price_change'].rolling(window=5).apply(lambda x: abs(sum([i for i in x if i < 0])), raw=True)  # 5根K线仅计算下跌部分
+        df['down_momentum_5'] = df['down_momentum_5'].fillna(0)
+        
+        # 新增跌类专属特征：volume_down_ratio
+        df['volume_down_ratio'] = df['tick_volume'] / df['tick_volume'].rolling(window=10).mean()  # 成交量相对均值的比值
+        df['down_volume_impulse'] = df['volume_down_ratio'] * (df['price_change'] < 0).astype(int)  # 放量下跌占比
+        
+        # dynamic_activity 特征优化：新增"活跃度趋势"特征
+        df['activity_trend'] = df['dynamic_activity'] - df['dynamic_activity'].shift(5)  # 当前活跃度 - 前5根平均活跃度
+        df['activity_trend'] = df['activity_trend'].fillna(0)
+        
+        # 新增跌类专属特征：activity_trend 下跌趋势
+        df['activity_trend_down'] = np.where(df['activity_trend'] < 0, abs(df['activity_trend']), 0)  # 仅当活跃度趋势向下时考虑
+        
+        # 新增跌类专属特征：ma5_deviation 向下偏离
+        df['ma5_deviation_down'] = np.where(df['ma5_trend_strength'] < 0, df['ma5_deviation'], 0)  # 仅当趋势向下时考虑偏离度
+        
         return df
 
     def add_trend_features(self, df):
         """添加M15趋势特征（简化版）"""
-        # 计算ma21_direction特征，如果不存在ma21则先计算
-        if 'ma21' in df.columns:
-            df['ma21_direction'] = (df['close'] - df['ma21']).rolling(2).apply(lambda x: 1 if x.iloc[-1] > x.iloc[-2] else -1 if x.iloc[-1] < x.iloc[-2] else 0)
-        else:
-            df['ma21_direction'] = (df['close'] - df['close'].rolling(21).mean()).rolling(2).apply(lambda x: 1 if x.iloc[-1] > x.iloc[-2] else -1 if x.iloc[-1] < x.iloc[-2] else 0)
+        try:
+            # 计算ma21_direction特征，如果不存在ma21则先计算
+            if 'ma21' in df.columns:
+                ma21_diff = df['close'] - df['ma21']
+            else:
+                ma21 = df['close'].rolling(21).mean()
+                ma21_diff = df['close'] - ma21
+            
+            # 使用shift方法替代rolling.apply，避免潜在错误
+            df['ma21_direction'] = np.where(
+                ma21_diff > ma21_diff.shift(1), 1,
+                np.where(ma21_diff < ma21_diff.shift(1), -1, 0)
+            )
+            
+            # 计算趋势持续时间
+            df['trend_duration'] = df['ma21_direction'].rolling(10).sum().abs()
+            
+            # 计算连续涨跌动量
+            price_diff = df['close'].diff()
+            df['consecutive_up_momentum'] = np.where(price_diff > 0, price_diff, 0)
+            df['consecutive_down_momentum'] = np.where(price_diff < 0, -price_diff, 0)
+            
+            # 用0填充NaN值
+            df['ma21_direction'] = df['ma21_direction'].fillna(0).astype(int)
+            df['trend_duration'] = df['trend_duration'].fillna(0)
+            df['consecutive_up_momentum'] = df['consecutive_up_momentum'].fillna(0)
+            df['consecutive_down_momentum'] = df['consecutive_down_momentum'].fillna(0)
+        except Exception as e:
+            logger.warning(f"⚠️ 添加趋势特征失败: {e}，使用默认值")
+            # 设置默认值
+            df['ma21_direction'] = 0
+            df['trend_duration'] = 0
+            df['consecutive_up_momentum'] = 0
+            df['consecutive_down_momentum'] = 0
         
-        df['trend_duration'] = df['ma21_direction'].rolling(10).sum().abs()
-        df['consecutive_up_momentum'] = df['close'].rolling(2).apply(lambda x: x[1] - x[0] if x[1] > x[0] else 0)
-        df['consecutive_down_momentum'] = df['close'].rolling(2).apply(lambda x: x[0] - x[1] if x[1] < x[0] else 0)
         return df
 
     def update_daily_balance(self):
         """更新当日初始余额"""
         try:
             account_info = mt5.account_info()
-            if account_info and (self.daily_start_balance is None or datetime.now().hour == 0):
-                self.daily_start_balance = account_info.balance
-                logger.info(f"📅 当日初始余额更新为: {self.daily_start_balance}")
+            # 获取XAUUSD市场数据时间，严格遵守时间源使用规范
+            current_tick = mt5.symbol_info_tick(self.SYMBOL)
+            if current_tick:
+                current_market_time = datetime.fromtimestamp(current_tick.time)
+                if account_info and (self.daily_start_balance is None or current_market_time.hour == 0):
+                    self.daily_start_balance = account_info.balance
+                    logger.info(f"📅 当日初始余额更新为: {self.daily_start_balance}")
+            else:
+                logger.error("❌ 无法获取XAUUSD市场时间，严格禁止使用本地时间")
+                raise Exception("无法获取XAUUSD市场数据时间")
         except Exception as e:
             logger.error(f"❌ 更新当日余额失败: {e}")
 
@@ -521,46 +648,44 @@ class MultiPeriodRealTimeTrader:
         """获取指定时间周期的市场数据（带重试和异常值处理）"""
         for retry in range(self.MAX_RETRIES):
             try:
-                current_tick = mt5.symbol_info_tick(self.SYMBOL)
-                if current_tick is None:
-                    logger.error(f"❌ 无法获取当前市场数据（重试{retry + 1}/{self.MAX_RETRIES}）")
-                    time.sleep(self.RETRY_INTERVAL)
-                    continue
-
-                current_time = datetime.fromtimestamp(current_tick.time)
-
-                # 计算开始时间
-                if timeframe == mt5.TIMEFRAME_M1:
-                    start_time = current_time - timedelta(minutes=bars_count)
-                elif timeframe == mt5.TIMEFRAME_M5:
-                    start_time = current_time - timedelta(minutes=5 * bars_count)
-                elif timeframe == mt5.TIMEFRAME_M15:
-                    start_time = current_time - timedelta(minutes=15 * bars_count)
-                else:
-                    logger.error(f"❌ 不支持的时间周期: {timeframe}")
-                    return None
-
-                # 获取历史数据
-                rates = mt5.copy_rates_range(
-                    self.SYMBOL,
-                    timeframe,
-                    int(start_time.timestamp()),
-                    int(current_time.timestamp())
-                )
+                # 记录尝试获取的数据周期
+                timeframe_name = {mt5.TIMEFRAME_M1: 'M1', mt5.TIMEFRAME_M5: 'M5', mt5.TIMEFRAME_M15: 'M15'}.get(timeframe, str(timeframe))
+                logger.info(f"📊 开始获取{timeframe_name}数据，K线索取数量: {bars_count + 1}")
+                
+                # 从MT5获取实时数据，获取额外一根K线以确保我们有足够数据
+                rates = mt5.copy_rates_from_pos(self.SYMBOL, timeframe, 0, bars_count + 1)
 
                 if rates is None or len(rates) == 0:
                     logger.error(
-                        f"❌ 获取{timeframe}历史数据失败（重试{retry + 1}/{self.MAX_RETRIES}）: {mt5.last_error()}")
+                        f"❌ 获取{timeframe_name}({timeframe})历史数据失败（重试{retry + 1}/{self.MAX_RETRIES}）: {mt5.last_error()}")
                     time.sleep(self.RETRY_INTERVAL)
                     continue
+                
+                logger.debug(f"📊 成功获取{timeframe_name}原始数据，共{len(rates)}根K线")
 
                 # 转换为DataFrame
                 df = pd.DataFrame(rates)
-                df['time'] = pd.to_datetime(df['time'], unit='s', utc=True)
-                df.set_index('time', inplace=True)
+                df['time'] = pd.to_datetime(df['time'], unit='s')
+                
+                # 移除最后一根K线，因为它可能是未完成的K线
+                # 这确保我们只使用已完成的K线进行分析
+                if len(df) > 1:
+                    df = df[:-1]  # 移除最后一行
+                elif len(df) == 1:
+                    # 如果只有一根K线，则使用它（虽然可能未完成）
+                    pass
+                
+                # 确保有足够的数据用于分析
+                timeframe_name = {mt5.TIMEFRAME_M1: 'M1', mt5.TIMEFRAME_M5: 'M5', mt5.TIMEFRAME_M15: 'M15'}.get(timeframe, str(timeframe))
+                if len(df) < bars_count * 0.8:  # 至少需要80%的数据
+                    logger.warning(f"⚠️ {timeframe_name}数据不足，需要{bars_count}根，实际{len(df)}根（重试{retry + 1}/{self.MAX_RETRIES}）")
+                    time.sleep(self.RETRY_INTERVAL)
+                    continue
 
                 # 添加基础特征
+                logger.debug(f"📊 开始为{timeframe_name}数据添加基础特征")
                 df = self.feature_engineer.add_core_features(df)
+                logger.debug(f"📊 {timeframe_name}基础特征添加完成，当前列数: {len(df.columns)}")
 
                 # 根据周期添加特征
                 if timeframe == mt5.TIMEFRAME_M1:
@@ -754,7 +879,12 @@ class MultiPeriodRealTimeTrader:
                     df['engulfing'] = np.where((df['body_size'] > 0) & (df['close'].shift(1) - df['open'].shift(1) < 0) & (df['close'] - df['open'] > 0) & (df['close'] > df['open'].shift(1)) & (df['open'] < df['close'].shift(1)), 1, 0)
                     
                     # 添加趋势强度特征
-                    df['adx'] = self.calculate_adx(df['high'], df['low'], df['close'], 14)
+                    try:
+                        df['adx'] = self.calculate_adx(df['high'], df['low'], df['close'], 14)
+                    except Exception as e:
+                        logger.warning(f"⚠️ M15计算adx特征失败: {e}")
+                        df['adx'] = 0  # 设置默认值
+                    
                     df['ma_trend_alignment'] = np.where(
                         (df['ma5'] > df['ma10']) & (df['ma10'] > df['ma20']), 1,  # 多头排列
                         np.where(
@@ -779,11 +909,19 @@ class MultiPeriodRealTimeTrader:
                     df['trend_duration'] = trend_durations
                     
                     # 动态活跃度特征
-                    df = self.calculate_dynamic_activity_m15(df)
+                    try:
+                        df = self.calculate_dynamic_activity_m15(df)
+                    except Exception as e:
+                        logger.warning(f"⚠️ M15计算动态活跃度特征失败: {e}")
+                        # 设置默认的动态活跃度特征值
+                        df['dynamic_activity'] = 0
+                        df['activity_level'] = 1
+                        df['dynamic_activity_up_mean'] = 0
+                        df['high_activity_up_weight'] = 1.0
                     
                     # 新增跌类专属趋势特征
-                    df['consecutive_down_momentum'] = df['close'].pct_change().rolling(window=2).apply(
-                        lambda x: abs(sum([i for i in x if i < 0])), raw=True)  # 仅计算下跌部分
+                    close_pct_change = df['close'].pct_change()
+                    df['consecutive_down_momentum'] = np.where(close_pct_change < 0, abs(close_pct_change), 0)
                     df['consecutive_down_momentum'] = df['consecutive_down_momentum'].fillna(0)
                     
                     # ATR21扩张时的下跌概率
@@ -850,11 +988,17 @@ class MultiPeriodRealTimeTrader:
                 period_key = 'm1' if timeframe == mt5.TIMEFRAME_M1 else 'm5' if timeframe == mt5.TIMEFRAME_M5 else 'm15'
                 feature_list = self.FEATURE_CONFIG[period_key]
                 available_features = [f for f in feature_list if f in df.columns]
+                
+                if not available_features:
+                    logger.error(f"❌ {period_key.upper()}无可用特征列")
+                    return None
+                
                 df = df[available_features]
 
                 return df
 
             except Exception as e:
+                logger.error(f"Line: {e.__traceback__.tb_lineno}")
                 logger.error(f"❌ 获取市场数据失败（重试{retry + 1}/{self.MAX_RETRIES}）: {e}")
                 if retry < self.MAX_RETRIES - 1:
                     time.sleep(self.RETRY_INTERVAL)
@@ -866,28 +1010,73 @@ class MultiPeriodRealTimeTrader:
         # 增加获取数据量以满足M15数据需求
         initial_bars = max(self.HISTORY_M1_BARS, self.HISTORY_M5_BARS, self.HISTORY_M15_BARS) + 200
 
-        data = {
-            'm1': self.get_current_market_data(self.M1_TIMEFRAME, initial_bars),
-            'm5': self.get_current_market_data(self.M5_TIMEFRAME, initial_bars),
-            'm15': self.get_current_market_data(self.M15_TIMEFRAME, initial_bars + 100)  # 为M15额外增加数据量
-        }
+        # 为不同周期分别获取数据，对M15周期使用更多数据
+        data = {}
+        
+        # 获取M1数据
+        data['m1'] = self.get_current_market_data(self.M1_TIMEFRAME, initial_bars)
+        
+        # 获取M5数据
+        data['m5'] = self.get_current_market_data(self.M5_TIMEFRAME, initial_bars)
+        
+        # 获取M15数据 - 使用更多数据并增加重试
+        m15_data_retries = 0
+        m15_initial_bars = initial_bars + 100
+        m15_data = None
+        
+        while m15_data is None and m15_data_retries < 3:
+            m15_data = self.get_current_market_data(self.M15_TIMEFRAME, m15_initial_bars)
+            if m15_data is None:
+                logger.warning(f"⚠️ 第{m15_data_retries + 1}次获取M15数据失败，增加数据量重试")
+                m15_initial_bars += 100  # 增加数据量
+                m15_data_retries += 1
+            elif len(m15_data) < self.HISTORY_M15_BARS:
+                logger.warning(f"⚠️ M15数据不足，需要{self.HISTORY_M15_BARS}根，实际{len(m15_data)}根，增加数据量重试")
+                m15_initial_bars += 100  # 增加数据量
+                m15_data_retries += 1
+                m15_data = None  # 重置数据，重新获取
+        
+        data['m15'] = m15_data
+        
+        # 验证数据完整性 - 确保获取到足够的数据
+        for period_key, period_data in data.items():
+            if period_data is not None:
+                min_required = getattr(self, f'HISTORY_{period_key.upper()}_BARS')
+                if len(period_data) < min_required:
+                    logger.warning(f"⚠️ {period_key.upper()}数据不足，需要{min_required}根，实际{len(period_data)}根")
+                else:
+                    logger.debug(f"📊 {period_key.upper()}数据获取成功，共{len(period_data)}根K线")
 
         # 特征标准化
         for period in ['m1', 'm5', 'm15']:
-            if data[period] is not None and self.scalers.get(period) is not None:
-                feature_cols = [col for col in self.FEATURE_CONFIG[period] if col in data[period].columns]
-                if feature_cols:
-                    # 检查特征数量是否匹配
-                    expected_features = self.scalers[period].n_features_in_ if hasattr(self.scalers[period], 'n_features_in_') else len(feature_cols)
-                    if len(feature_cols) == expected_features:
-                        try:
-                            transformed_data = self.scalers[period].transform(data[period][feature_cols])
-                            # 将转换后的数据赋回原DataFrame
-                            data[period][feature_cols] = transformed_data
-                        except ValueError as e:
-                            logger.warning(f"⚠️ {period}标准化器特征数量不匹配: {e}，跳过标准化")
+            if data[period] is not None:
+                # logger.info(f"📊 {period.upper()}标准化前特征列数: {len(data[period].columns) if data[period] is not None else 0}")
+                # 
+                if self.scalers.get(period) is not None:
+                    feature_cols = [col for col in self.FEATURE_CONFIG[period] if col in data[period].columns]
+                    # logger.info(f"📊 {period.upper()}匹配的特征数: {len(feature_cols)}, 配置中定义的特征数: {len(self.FEATURE_CONFIG[period])}")
+                    # 
+                    if feature_cols:
+                        # 检查特征数量是否匹配
+                        expected_features = self.scalers[period].n_features_in_ if hasattr(self.scalers[period], 'n_features_in_') else len(feature_cols)
+                        # logger.info(f"📊 {period.upper()}标准化器期望特征数: {expected_features}, 实际可用特征数: {len(feature_cols)}")
+                        #
+                        if len(feature_cols) == expected_features:
+                            try:
+                                transformed_data = self.scalers[period].transform(data[period][feature_cols])
+                                # 将转换后的数据赋回原DataFrame
+                                data[period][feature_cols] = transformed_data
+                                logger.debug(f"✅ {period.upper()}标准化完成")
+                            except ValueError as e:
+                                logger.warning(f"⚠️ {period}标准化器特征数量不匹配: {e}，跳过标准化")
+                            except Exception as e:
+                                logger.warning(f"⚠️ {period}标准化器应用失败: {e}，跳过标准化")
+                        else:
+                            logger.warning(f"⚠️ {period}特征数量不匹配: 期望{expected_features}，实际{len(feature_cols)}，跳过标准化")
                     else:
-                        logger.warning(f"⚠️ {period}特征数量不匹配: 期望{expected_features}，实际{len(feature_cols)}，跳过标准化")
+                        logger.warning(f"⚠️ {period}无匹配特征，跳过标准化")
+            else:
+                logger.warning(f"⚠️ {period}数据为None，跳过标准化")
 
         return data
 
@@ -922,7 +1111,18 @@ class MultiPeriodRealTimeTrader:
                         return 0.0, 0.0, 0.0
 
             # 获取最新的特征数据
-            latest_data = df.iloc[-1][available_features].values.reshape(1, -1)
+            latest_row = df.iloc[-1][available_features]
+            latest_data = latest_row.values.reshape(1, -1)
+            
+            # 检查数据中是否包含NaN或无穷大值
+            if np.isnan(latest_data).any() or np.isinf(latest_data).any():
+                logger.warning(f"⚠️ {period_key.upper()}特征数据包含NaN或无穷大值，进行填充处理")
+                # 使用前一个有效值填充NaN
+                latest_data = pd.DataFrame(latest_data).fillna(method='ffill').fillna(method='bfill').values
+                # 检查是否仍然包含NaN或无穷大值
+                if np.isnan(latest_data).any() or np.isinf(latest_data).any():
+                    logger.error(f"❌ {period_key.upper()}特征数据无法修复，跳过预测")
+                    return 0.0, 0.0, 0.0
 
             # 如果有标准化器，应用标准化
             if self.scalers.get(period_key) is not None and len(available_features) > 0:
@@ -934,8 +1134,12 @@ class MultiPeriodRealTimeTrader:
                         else:
                             logger.warning(f"⚠️ {period_key.upper()}特征名称不匹配，跳过标准化")
                     else:
-                        # 如果没有feature_names_in_属性，跳过标准化
-                        logger.warning(f"⚠️ {period_key.upper()}标准化器无特征名称信息，跳过标准化")
+                        # 检查特征数量是否匹配
+                        expected_features = self.scalers[period_key].n_features_in_ if hasattr(self.scalers[period_key], 'n_features_in_') else len(available_features)
+                        if len(available_features) == expected_features:
+                            latest_data = self.scalers[period_key].transform(latest_data)
+                        else:
+                            logger.warning(f"⚠️ {period_key.upper()}特征数量不匹配: 期望{expected_features}，实际{len(available_features)}，跳过标准化")
                 except Exception as e:
                     logger.warning(f"⚠️ {period_key.upper()}标准化失败: {e}，跳过标准化")
 
@@ -943,12 +1147,25 @@ class MultiPeriodRealTimeTrader:
             dtest = xgb.DMatrix(latest_data)
 
             # 预测概率
-            pred_proba_raw = self.models[period_key].predict(dtest)
+            try:
+                pred_proba_raw = self.models[period_key].predict(dtest)
+            except Exception as e:
+                logger.error(f"❌ {period_key.upper()}模型预测失败: {e}")
+                return 0.0, 0.0, 0.0
+            
             # 确保pred_proba是numpy数组的一维数组
             if isinstance(pred_proba_raw, (list, np.ndarray)):
                 pred_proba = pred_proba_raw[0] if len(pred_proba_raw) > 0 else pred_proba_raw
             else:
                 pred_proba = pred_proba_raw
+            
+            # 检查预测结果是否为有效的数值
+            if not isinstance(pred_proba, np.ndarray) and not isinstance(pred_proba, (list, tuple)):
+                logger.error(f"❌ {period_key.upper()}预测结果格式不正确: {type(pred_proba)}")
+                return 0.0, 0.0, 0.0
+            
+            # 转换为numpy数组以确保可以正确索引
+            pred_proba = np.array(pred_proba)
             
             # 使用标签映射获取正确的概率分布
             label_mapping = self.label_mappings.get(period_key, {-1: 0, 0: 1, 1: 2})
@@ -961,12 +1178,20 @@ class MultiPeriodRealTimeTrader:
             hold_prob = pred_proba[hold_idx] if hold_idx < len(pred_proba) else 0.0
             up_prob = pred_proba[up_idx] if up_idx < len(pred_proba) else 0.0
 
+            # 检查概率值是否为有效数值
+            if np.isnan(up_prob) or np.isnan(down_prob) or np.isnan(hold_prob):
+                logger.warning(f"⚠️ {period_key.upper()}预测概率包含NaN值，使用默认值")
+                return 0.0, 0.0, 1.0  # 默认返回观望
+
             # 归一化概率
             total = up_prob + down_prob + hold_prob
             if total > 0:
                 up_prob /= total
                 down_prob /= total
                 hold_prob /= total
+            else:
+                # 如果总和为0，设置为默认值
+                up_prob, down_prob, hold_prob = 0.0, 0.0, 1.0
 
             logger.info(
                 f"📊 {period_key.upper()}周期预测概率 - 上涨: {up_prob:.4f}, 下跌: {down_prob:.4f}, 观望: {hold_prob:.4f}")
@@ -1151,15 +1376,21 @@ class MultiPeriodRealTimeTrader:
                 if self.current_position:
                     logger.info(
                         f"✅ 开仓成功: {signal} | 手数: {self.LOT_SIZE} | 订单号: {result.order} | 入场价: {price:.5f}")
-                    # 记录交易
-                    self.daily_trades.append({
-                        'time': datetime.now(),
-                        'type': signal,
-                        'price': price,
-                        'sl': sl,
-                        'tp': tp,
-                        'ticket': result.order
-                    })
+                    # 记录交易，使用XAUUSD市场数据时间
+                    current_tick = mt5.symbol_info_tick(self.SYMBOL)
+                    if current_tick:
+                        trade_time = datetime.fromtimestamp(current_tick.time)
+                        self.daily_trades.append({
+                            'time': trade_time,
+                            'type': signal,
+                            'price': price,
+                            'sl': sl,
+                            'tp': tp,
+                            'ticket': result.order
+                        })
+                    else:
+                        logger.error("❌ 无法获取XAUUSD市场时间，严格禁止使用本地时间")
+                        raise Exception("无法获取XAUUSD市场数据时间")
                     return True
                 else:
                     logger.warning(f"⚠️ 订单返回成功但未检测到持仓（重试{retry + 1}/{self.MAX_RETRIES}）")
@@ -1480,6 +1711,11 @@ class MultiPeriodRealTimeTrader:
     def run_trading_cycle(self):
         """执行单次交易循环"""
         try:
+            # 检查是否有暂停交易的标记文件
+            if os.path.exists("暂停交易.flag"):
+                logger.info("📅 检测到暂停交易标记，暂停交易操作...")
+                return False
+            
             # 同步持仓状态
             self.check_existing_positions()
 
@@ -1506,14 +1742,20 @@ class MultiPeriodRealTimeTrader:
                 min_confidence = max(0.6, 0.8 - current_accuracy * 0.3)
                 if prob > min_confidence:
                     logger.info(f"📈 开仓: {signal} 信号，置信度 {prob:.3f} (阈值: {min_confidence:.3f})")
-                    # 记录预测
-                    self.prediction_history.append({
-                        'signal': signal,
-                        'confidence': prob,
-                        'timestamp': datetime.now(),
-                        'actual_outcome': None,
-                        'is_correct': None
-                    })
+                    # 记录预测，使用XAUUSD市场数据时间
+                    current_tick = mt5.symbol_info_tick(self.SYMBOL)
+                    if current_tick:
+                        timestamp = datetime.fromtimestamp(current_tick.time)
+                        self.prediction_history.append({
+                            'signal': signal,
+                            'confidence': prob,
+                            'timestamp': timestamp,
+                            'actual_outcome': None,
+                            'is_correct': None
+                        })
+                    else:
+                        logger.error("❌ 无法获取XAUUSD市场时间，严格禁止使用本地时间")
+                        raise Exception("无法获取XAUUSD市场数据时间")
                     # 限制历史长度
                     if len(self.prediction_history) > self.max_history_length:
                         self.prediction_history.pop(0)
@@ -1525,8 +1767,38 @@ class MultiPeriodRealTimeTrader:
 
             # 打印持仓状态
             if self.current_position is not None:
-                logger.info(
-                    f"📌 当前持仓: {self.current_position['direction']}, 盈亏: {self.current_position.get('profit', 0):.2f}美金")
+                # 从MT5获取当前持仓的实际盈亏信息
+                positions = mt5.positions_get(symbol=self.SYMBOL)
+                if positions is not None:
+                    # 筛选出属于当前交易器的持仓（通过magic number）
+                    filtered_positions = [pos for pos in positions if pos.magic == self.MAGIC_NUMBER]
+                    if len(filtered_positions) > 0:
+                        current_position_info = filtered_positions[0]
+                        profit = current_position_info.profit  # 使用MT5提供的实际盈亏
+                        logger.info(
+                            f"📌 当前持仓: {self.current_position['direction']}, 盈亏: {profit:.2f}美金")
+                    else:
+                        # 如果无法从MT5获取持仓信息，使用计算方式作为备选
+                        data = self.get_current_market_data(self.M5_TIMEFRAME, 1)
+                        if data is not None and len(data) > 0:
+                            current_price = data['close'].iloc[-1]  # 获取当前价格
+                            profit = 0
+                            if self.current_position['direction'] == "做多":  # 做多
+                                profit = (current_price - self.current_position['entry_price']) * 100  # XAUUSD标准合约乘数
+                            else:  # 做空
+                                profit = (self.current_position['entry_price'] - current_price) * 100  # XAUUSD标准合约乘数
+                            logger.info(f"📌 当前持仓: {self.current_position['direction']}, 盈亏: {profit:.2f}美金")
+                else:
+                    # 如果无法获取持仓信息，使用计算方式作为备选
+                    data = self.get_current_market_data(self.M5_TIMEFRAME, 1)
+                    if data is not None and len(data) > 0:
+                        current_price = data['close'].iloc[-1]  # 获取当前价格
+                        profit = 0
+                        if self.current_position['direction'] == "做多":  # 做多
+                            profit = (current_price - self.current_position['entry_price']) * 100  # XAUUSD标准合约乘数
+                        else:  # 做空
+                            profit = (self.current_position['entry_price'] - current_price) * 100  # XAUUSD标准合约乘数
+                        logger.info(f"📌 当前持仓: {self.current_position['direction']}, 盈亏: {profit:.2f}美金")
             else:
                 logger.info("📌 当前无持仓")
 
@@ -1536,50 +1808,142 @@ class MultiPeriodRealTimeTrader:
             logger.error(f"❌ 交易循环执行失败: {e}", exc_info=True)
             return False
 
-    def check_kline_update(self):
-        """检查K线是否更新"""
+    def get_latest_data(self, timeframe, count=50):
+
         try:
-            # 获取最新的K线时间
-            m1_rates = mt5.copy_rates_from_pos(self.SYMBOL, mt5.TIMEFRAME_M1, 0, 1)
-            m5_rates = mt5.copy_rates_from_pos(self.SYMBOL, mt5.TIMEFRAME_M5, 0, 1)
 
-            if len(m1_rates) == 0 or len(m5_rates) == 0:
-                logger.error("❌ 无法获取最新K线数据")
-                return False
+            # 从MT5获取实时数据，获取额外一根K线以确保我们有足够数据
+            rates = mt5.copy_rates_from_pos(self.SYMBOL, timeframe, 0, count + 10)  # 增加获取的数据量以确保有足够的历史数据
 
-            current_m1_time = datetime.fromtimestamp(m1_rates[0]['time'])
-            current_m5_time = datetime.fromtimestamp(m5_rates[0]['time'])
+            if rates is None or len(rates) == 0:
+                logger.warning("获取MT5数据失败或数据为空")
+                return None
 
-            # 检查M5 K线是否更新（主要交易周期）
-            if not hasattr(self, 'last_m5_time') or self.last_m5_time is None or current_m5_time > self.last_m5_time:
-                logger.info(f"📅 M5 K线已更新到: {current_m5_time.strftime('%Y-%m-%d %H:%M:%S')}")
-                self.last_m5_time = current_m5_time
-                # 执行交易循环
-                self.run_trading_cycle()
-                return True
+            # 转换为DataFrame
+            df = pd.DataFrame(rates)
+            df['time'] = pd.to_datetime(df['time'], unit='s')
 
-            return False
+            # 根据时间框架过滤已完成的K线
+            # 对于M1，确保获取到已完成的分钟K线
+            # 对于M5，确保获取到已完成的5分钟K线
+            # 对于M15，确保获取到已完成的15分钟K线
+            current_tick = mt5.symbol_info_tick(self.SYMBOL)
+            if current_tick:
+                current_time = datetime.fromtimestamp(current_tick.time)
+                
+                # 根据不同时间框架确定已完成K线
+                if timeframe == self.M1_TIMEFRAME:
+                    # M1 K线在当前时间的前1分钟及更早的K线是完成的
+                    completed_time = current_time - timedelta(minutes=1)
+                    df = df[df['time'] <= completed_time]
+                elif timeframe == self.M5_TIMEFRAME:
+                    # M5 K线在当前时间的前5分钟及更早的K线是完成的
+                    completed_time = current_time - timedelta(minutes=5)
+                    df = df[df['time'] <= completed_time]
+                elif timeframe == self.M15_TIMEFRAME:
+                    # M15 K线在当前时间的前15分钟及更早的K线是完成的
+                    completed_time = current_time - timedelta(minutes=15)
+                    df = df[df['time'] <= completed_time]
+            
+            # 确保只返回请求的数量
+            if len(df) > count:
+                df = df.iloc[-count:]
+
+            return df
 
         except Exception as e:
-            logger.error(f"❌ 检查K线更新失败: {e}")
-            return False
+            logger.error(f"获取最新数据异常: {str(e)}")
+            return None
+
+    def check_kline_update(self):
+        """检查K线是否更新"""
+        df1 = self.get_latest_data(self.M1_TIMEFRAME, 1)
+        df5 = self.get_latest_data(self.M5_TIMEFRAME, 1)
+        df15 = self.get_latest_data(self.M15_TIMEFRAME, 1)
+
+        current_kline_time_1 = df1.iloc[-1]['time']
+        current_kline_time_5 = df5.iloc[-1]['time']
+        current_kline_time_15 = df15.iloc[-1]['time']
+        # 打印并验证M1、M5、M15各周期最新K线的时间戳
+        logger.info(f"📅 最新M1 K线时间: {current_kline_time_1} " )
+        logger.info(f"📅 最新M5 K线时间: {current_kline_time_5} ")
+        logger.info(f"📅 最新M15 K线时间: {current_kline_time_15} ")
+
+        return True
+
 
     def run_trading_loop(self):
         """运行交易循环（优化版）"""
         self.is_running = True
         self.last_m5_time = None
         logger.info("🚀 开始多周期实时交易循环")
+        
+        # 首次运行数据新鲜度保障 - 等待最新的已完成K线
+        first_run = True
+        while first_run:
+            m5_rates = mt5.copy_rates_from_pos(self.SYMBOL, mt5.TIMEFRAME_M5, 0, 1)
+            if len(m5_rates) > 0:
+                current_m5_time = datetime.fromtimestamp(m5_rates[0]['time'])
+                # 获取XAUUSD市场数据时间，严格遵守时间源使用规范
+                current_tick = mt5.symbol_info_tick(self.SYMBOL)
+                if current_tick:
+                    current_time = datetime.fromtimestamp(current_tick.time)
+                else:
+                    # 严格禁止使用本地时间，抛出异常
+                    logger.error("❌ 无法获取XAUUSD市场时间，严格禁止使用本地时间")
+                    raise Exception("无法获取XAUUSD市场数据时间")
+                
+                time_diff = abs((current_time - current_m5_time).total_seconds())
+                
+                # 如果最新K线时间与当前时间相差超过15分钟，等待并重新获取
+                if time_diff > 900:  # 15分钟 = 900秒
+                    logger.info(f"📅 首次运行：最新K线时间({current_m5_time})与服务器时间({current_time})相差{time_diff/60:.1f}分钟，等待数据更新...")
+                    time.sleep(30)  # 等待30秒后重新检查
+                    continue
+                else:
+                    logger.info(f"📅 首次运行：K线数据新鲜度正常，开始交易")
+                    self.last_m5_time = current_m5_time
+                    break
+            else:
+                logger.error("❌ 首次运行：无法获取最新K线数据，等待...")
+                time.sleep(30)
+                continue
+            
+            first_run = False
 
-        # 记录上次增量训练时间
-        last_training_time = datetime.now()
+        # 记录上次增量训练时间，使用XAUUSD市场数据时间
+        current_tick = mt5.symbol_info_tick(self.SYMBOL)
+        if current_tick:
+            last_training_time = datetime.fromtimestamp(current_tick.time)
+        else:
+            logger.error("❌ 无法获取XAUUSD市场时间，严格禁止使用本地时间")
+            raise Exception("无法获取XAUUSD市场数据时间")
 
         while self.is_running and not self.stop_event.is_set():
             try:
                 # 检查K线更新
                 self.check_kline_update()
 
-                # 每小时执行一次增量训练
-                current_time = datetime.now()
+                # 计算交易信号并执行交易（如果需要）
+                signal, confidence = self.calculate_fused_signal()
+                if signal != "HOLD":
+                    logger.info(f"💡 决策建议: {signal} | 置信度: {confidence:.4f}")
+                    # 如果没有持仓，则执行交易
+                    if self.current_position is None:
+                        self.place_order(signal)
+                    else:
+                        # 如果有持仓，检查是否需要平仓
+                        self.check_and_close_by_signal(signal)
+                else:
+                    logger.info(f"📊 当前无交易信号，保持观望")
+
+                # 每小时执行一次增量训练，使用XAUUSD市场数据时间
+                current_tick = mt5.symbol_info_tick(self.SYMBOL)
+                if current_tick:
+                    current_time = datetime.fromtimestamp(current_tick.time)
+                else:
+                    logger.error("❌ 无法获取XAUUSD市场时间，严格禁止使用本地时间")
+                    raise Exception("无法获取XAUUSD市场数据时间")
                 if (current_time - last_training_time).total_seconds() >= 3600:
                     self.incremental_training()
                     last_training_time = current_time
@@ -1604,11 +1968,17 @@ class MultiPeriodRealTimeTrader:
             logger.info("📉 检测到持仓，执行平仓")
             self.close_position("停止交易")
 
-        # 保存当日交易记录
+        # 保存当日交易记录，使用XAUUSD市场数据时间
         if self.daily_trades:
-            with open(f"daily_trades_{datetime.now().strftime('%Y%m%d')}.log", 'w', encoding='utf-8') as f:
-                for trade in self.daily_trades:
-                    f.write(f"{trade}\n")
+            current_tick = mt5.symbol_info_tick(self.SYMBOL)
+            if current_tick:
+                current_date = datetime.fromtimestamp(current_tick.time).strftime('%Y%m%d')
+                with open(f"daily_trades_{current_date}.log", 'w', encoding='utf-8') as f:
+                    for trade in self.daily_trades:
+                        f.write(f"{trade}\n")
+            else:
+                logger.error("❌ 无法获取XAUUSD市场时间，严格禁止使用本地时间")
+                raise Exception("无法获取XAUUSD市场数据时间")
 
         # 关闭MT5连接
         mt5.shutdown()
