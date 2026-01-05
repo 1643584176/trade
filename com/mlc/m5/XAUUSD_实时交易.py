@@ -1531,6 +1531,17 @@ class MultiPeriodRealTimeTrader:
         if self.current_position is None:
             return False
 
+        # 打印当前持仓信息
+        positions = mt5.positions_get(symbol=self.SYMBOL)
+        if positions is not None:
+            # 筛选出属于当前交易器的持仓（通过magic number）
+            filtered_positions = [pos for pos in positions if pos.magic == self.MAGIC_NUMBER]
+            if len(filtered_positions) > 0:
+                current_position_info = filtered_positions[0]
+                profit = current_position_info.profit  # 使用MT5提供的实际盈亏
+                logger.info(
+                    f"📌 检查持仓: {self.current_position['direction']}, 盈亏: {profit:.2f}美金, 信号: {current_signal}")
+
         try:
             current_direction = self.current_position['direction']
 
