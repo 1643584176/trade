@@ -780,8 +780,8 @@ class M1DataAnalyzerAndTrainer:
 
     def load_and_clean_data(self, csv_dir="m1_trend_analysis_results"):
         """直接使用内存中的趋势分析数据，不再从CSV加载"""
-        print(f"\n🔍 使用内存中的趋势分析数据...")
-        
+
+
         # 如果没有在analyze_trends中直接设置raw_data，我们从trends和significant_opportunities创建它
         # 这里我们直接使用内存中的数据
         if hasattr(self, 'significant_opportunities') and self.significant_opportunities:
@@ -803,7 +803,7 @@ class M1DataAnalyzerAndTrainer:
             (abs(self.raw_data['total_change']) >= 1)  # 过滤小于1美元的无效波动
             ]
 
-        print(f"✅ 数据时间范围：{self.raw_data['start_time'].min()} → {self.raw_data['start_time'].max()}")
+        # print(f"✅ 数据时间范围：{self.raw_data['start_time'].min()} → {self.raw_data['start_time'].max()}")
         return True
 
     def build_trading_features(self):
@@ -1080,7 +1080,6 @@ class M1DataAnalyzerAndTrainer:
 
     def train_multi_task_models(self):
         """训练多任务AI模型：同时预测方向、反转、时长、幅度"""
-        print("\n🚀 训练实战级多任务AI模型...")
 
         # 拆分训练集/测试集（7:3）
         X_train, X_test, y_train_trend, y_test_trend = train_test_split(
@@ -1101,12 +1100,12 @@ class M1DataAnalyzerAndTrainer:
             )
             self.reversal_model.fit(X_train_rev, y_train_rev)
             reversal_acc = accuracy_score(y_test_rev, self.reversal_model.predict(X_test_rev))
-            print(f"🔄 趋势反转模型准确率：{reversal_acc:.4f}")
+            # print(f"🔄 趋势反转模型准确率：{reversal_acc:.4f}")
         else:
             # 如果反转标签都相同，创建一个常量预测器
             self.reversal_model = None
 
-            print(f"   所有反转标签值为: {unique_reversal_labels[0]}")
+            # print(f"   所有反转标签值为: {unique_reversal_labels[0]}")
 
         X_train_dur, X_test_dur, y_train_dur, y_test_dur = train_test_split(
             self.features, self.target_duration, test_size=0.3, random_state=42
@@ -1121,7 +1120,7 @@ class M1DataAnalyzerAndTrainer:
         )
         self.trend_model.fit(X_train, y_train_trend)
         trend_acc = accuracy_score(y_test_trend, self.trend_model.predict(X_test))
-        print(f"🎯 涨跌方向模型准确率：{trend_acc:.4f} (≥0.8才适合实战)")
+        print(f"🎯 模型准确率：{trend_acc:.4f}")
 
         # 2. 训练趋势时长模型（回归，AI自主判断持仓时长）
         self.duration_model = RandomForestRegressor(
@@ -1156,7 +1155,7 @@ class M1DataAnalyzerAndTrainer:
         joblib.dump(self.amplitude_model, os.path.join(self.model_dir, f"amplitude_model_{model_ts}.pkl"))
         joblib.dump(self.scaler, os.path.join(self.model_dir, f"scaler_{model_ts}.pkl"))
 
-        print(f"\n💾 实战模型已保存到 {self.model_dir} 目录")
+        # print(f"\n💾 实战模型已保存到 {self.model_dir} 目录")
         return True
 
     def get_latest_m1_time(self):
@@ -1192,7 +1191,7 @@ class M1DataAnalyzerAndTrainer:
         # 获取最新K线的时间
         latest_time = pd.to_datetime(rates[0]['time'], unit='s')
         
-        print(f"✅ 最新M1数据时间: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        # print(f"✅ 最新M1数据时间: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # 断开MT5连接
         mt5.shutdown()
@@ -1202,7 +1201,7 @@ class M1DataAnalyzerAndTrainer:
     def generate_trading_signals(self):
         """生成可直接下单的实战交易信号"""
         print(
-            f"{'开仓时间':<20} {'持仓时长':<10} {'方向':<8} {'反转概率':<12} {'止盈幅度':<12} {'止损幅度':<12} {'置信度':<10} {'风险收益比':<12} {'信号有效性':<10} {'交易时段':<10}")
+            f"{'开仓时间':<15} {'持仓时长':<10} {'方向':<8} {'反转概率':<8} {'止盈幅度':<8} {'止损幅度':<10} {'置信度':<8} {'风险收益比':<12} {'信号有效性':<8} {'交易时段':<8}")
 
         # 获取最新的M1数据时间
         latest_m1_time = self.get_latest_m1_time()
@@ -1428,9 +1427,6 @@ class M1DataAnalyzerAndTrainer:
             elif rsi_value < 30:
                 print(f"   ⚠️  RSI值为 {rsi_value:.2f}，市场可能超卖")
         
-        # 新增：回调和市场状态分析
-        print(f"\n🔍 AI市场状态分析:")
-        
         # 分析深度回调
         deep_retrace = raw_last_data.get('deep_retrace', 0)
         if deep_retrace == 1:
@@ -1479,25 +1475,15 @@ class M1DataAnalyzerAndTrainer:
             market_state += " (趋势强劲)"
         else:
             market_state += " (趋势不确定)"
-        
-        print(f"\n📋 市场状态: {market_state}")
-        print(f"   预测依据: 模型置信度{trend_confidence:.1f}%, 反转概率{reversal_prob:.1f}%, 风险收益比{risk_reward:.2f}")
-        
+
+
         # 实战下单建议
         if signal_valid:
             print(f"\n📝 实战下单建议：开仓时间：{open_time_str} | 交易时段：{session} | 交易方向：{trend_str}黄金M1 | 开仓价格：{round(last_raw_data['start_price'], 2)}美元 | 止盈设置：{round(last_raw_data['start_price'] + (amplitude_pred if trend_pred == 1 else -amplitude_pred), 2)}美元 | 止损设置：{round(last_raw_data['start_price'] - (stop_loss_amplitude if trend_pred == 1 else -stop_loss_amplitude), 2)}美元 | 平仓时间：{close_time.strftime('%Y-%m-%d %H:%M')}（或达到止盈/止损立即平仓）")
             
             if reversal_pred == 1 and reversal_prob > 70:
                 print(f"⚠️ 特别提醒：反转概率{reversal_prob}%，注意市场变化！")
-            
-            # 基于特征的持仓建议
-            if reversal_prob > 70:
-                print(f"💡 持仓建议：反转概率高({reversal_prob}%)，建议提前减仓或收紧止损")
-            elif reversal_prob < 30:
-                print(f"💡 持仓建议：趋势延续性强，可适当持有")
-            else:
-                print(f"💡 持仓建议：趋势方向不确定，注意风险管理")
-                
+
         # 返回最新生成的信号
         return self.trading_signals[-1] if self.trading_signals else None
 

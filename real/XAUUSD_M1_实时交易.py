@@ -257,8 +257,7 @@ class XAUUSDM1RealTimeTrader:
                 # 如果没有持仓，则今日初始余额就是当前余额
                 positions = mt5.positions_get(symbol=self.symbol)
                 if positions is None or len(positions) == 0:
-                    # 没有持仓，今日初始余额就是当前余额
-                    print("📊 没有持仓，今日初始余额等于当前余额")
+
                     return account_info.balance
                 else:
                     # 有持仓，需要计算持仓的浮动盈亏来反推初始余额
@@ -291,11 +290,8 @@ class XAUUSDM1RealTimeTrader:
                 total_daily_pnl = 0
                 for deal in history_deals:
                     total_daily_pnl += deal.profit
-
-                print(f"📊 今日总盈亏: {total_daily_pnl:.2f}")
                 # 今日初始余额 = 当前余额 - 今日盈亏
                 initial_balance = account_info.balance - total_daily_pnl
-                print(f"📊 今日初始余额计算: 当前余额 {account_info.balance:.2f} - 今日盈亏 {total_daily_pnl:.2f} = {initial_balance:.2f}")
                 return initial_balance
         except Exception as e:
             print(f"⚠️ 获取今日初始余额时出错: {str(e)}")
@@ -867,8 +863,7 @@ class XAUUSDM1RealTimeTrader:
             
             # 如果信号时间在未来1-5分钟内，则准备执行
             if signal_time.astimezone(UTC_PLUS_2).replace(tzinfo=None) > current_time.replace(tzinfo=None):
-                print(f"⏰ 信号已就绪，等待开仓时间: {signal_time_str}")
-                # 可以提前准备，但不执行交易
+
                 return latest_signal
             
             self.last_signal_time = signal_time
@@ -1067,8 +1062,8 @@ class XAUUSDM1RealTimeTrader:
             # 断开MT5连接
             mt5.shutdown()
             
-            print(f"📊 从当日统计获取数据 - 当前余额: {current_balance:.2f}USD, 今日盈亏: {daily_profit_loss:.2f}USD, 今日初始余额: {daily_start_balance:.2f}USD")
-            
+            # print(f"📊 从当日统计获取数据 - 当前余额: {current_balance:.2f}USD, 今日盈亏: {daily_profit_loss:.2f}USD, 今日初始余额: {daily_start_balance:.2f}USD")
+            #
         except Exception as e:
             print(f"❌ 更新每日统计数据时出错: {str(e)}")
             # 出错时使用原始方法更新数据
@@ -1146,7 +1141,7 @@ class XAUUSDM1RealTimeTrader:
             
             # 如果新信号方向与当前持仓方向相同，则不能开仓
             if existing_direction == direction:
-                print(f"⚠️ MT5中已有{existing_direction}持仓，无法开立同方向新仓")
+                # print(f"⚠️ MT5中已有{existing_direction}持仓，无法开立同方向新仓")
                 # 同步本地持仓列表
                 self.active_positions = []
                 for pos in mt5_positions:
@@ -1647,13 +1642,8 @@ class XAUUSDM1RealTimeTrader:
             pnl_percentage = (daily_pnl / daily_start_balance) * 100
         else:
             pnl_percentage = 0
-        
-        print(f"\n📋 当前状态:")
-        print(f"   当前账户余额: ${current_balance:.2f}")
-        print(f"   程序启动时余额: ${daily_start_balance:.2f}")
-        print(f"   今日盈亏: {daily_pnl:+.2f}$ ({pnl_percentage:+.2f}%)")
-        print(f"   活跃持仓数: {len(self.active_positions)}")
-        
+
+        print(f"当前账户余额: ${current_balance:.2f} | 程序启动时余额: ${daily_start_balance:.2f}|  今日盈亏: {daily_pnl:+.2f}$ ({pnl_percentage:+.2f}%)")
         # 显示当前交易状态
         if self.trading_disabled:
             print("   🚨 交易状态: 已禁用（因亏损限制）")
