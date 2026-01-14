@@ -974,6 +974,70 @@ class M1DataAnalyzerAndTrainer:
             elif df['breaks_support'].iloc[i] == 1:  # 向下突破
                 if df['rsi'].iloc[i] is not None and 30 < df['rsi'].iloc[i] < 50:
                     df['rsi_confirmation'].iloc[i] = 1  # RSI确认向下突破
+        
+        # 新增：回调识别特征
+        # 计算价格回撤比例（用于识别回调）
+        df['price_retrace_ratio'] = 0.0
+        df['recent_high'] = df['start_price'].rolling(window=20, min_periods=1).max()
+        df['recent_low'] = df['start_price'].rolling(window=20, min_periods=1).min()
+        
+        for i in range(1, len(df)):
+            current_price = df['start_price'].iloc[i]
+            recent_high = df['recent_high'].iloc[i-1]
+            recent_low = df['recent_low'].iloc[i-1]
+            
+            # 计算从近期高点的回撤比例
+            if recent_high != recent_low:
+                if df['trend_direction'].iloc[i] == 1:  # 当前处于上升趋势
+                    df['price_retrace_ratio'].iloc[i] = (recent_high - current_price) / (recent_high - recent_low)
+                else:  # 当前处于下降趋势
+                    df['price_retrace_ratio'].iloc[i] = (current_price - recent_low) / (recent_high - recent_low)
+            
+        # 识别回调模式 - 深度回调（可能预示趋势反转）
+        df['deep_retrace'] = (df['price_retrace_ratio'] > 0.5).astype(int)  # 深度回调
+        df['shallow_retrace'] = ((df['price_retrace_ratio'] > 0.2) & (df['price_retrace_ratio'] <= 0.5)).astype(int)  # 浅回调
+        
+        # 动量背离特征 - RSI与价格走势背离
+        df['momentum_divergence'] = 0
+        df['price_change'] = df['start_price'].diff()
+        df['rsi_change'] = df['rsi'].diff()
+        
+        for i in range(2, len(df)):
+            # 看涨背离：价格创新低但RSI未创新低
+            if (df['start_price'].iloc[i] < df['start_price'].iloc[i-2] and 
+                df['recent_low'].iloc[i] == df['start_price'].iloc[i] and  # 价格创新低
+                df['rsi'].iloc[i] > df['rsi'].iloc[i-2]):  # 但RSI未创新低
+                df['momentum_divergence'].iloc[i] = 1
+            # 看跌背离：价格创新高但RSI未创新高
+            elif (df['start_price'].iloc[i] > df['start_price'].iloc[i-2] and 
+                  df['recent_high'].iloc[i] == df['start_price'].iloc[i] and  # 价格创新高
+                  df['rsi'].iloc[i] < df['rsi'].iloc[i-2]):  # 但RSI未创新高
+                df['momentum_divergence'].iloc[i] = -1
+        
+        # MACD相关特征（简化版）
+        df['ema_fast'] = df['start_price'].ewm(span=12).mean()
+        df['ema_slow'] = df['start_price'].ewm(span=26).mean()
+        df['macd'] = df['ema_fast'] - df['ema_slow']
+        df['macd_signal'] = df['macd'].ewm(span=9).mean()
+        df['macd_histogram'] = df['macd'] - df['macd_signal']
+        
+        # MACD柱状图变化率（用于识别动能变化）
+        df['macd_hist_change'] = df['macd_histogram'].diff()
+        
+        # 价格与移动平均线的距离（用于识别回调后的重新测试）
+        df['price_ma_distance'] = (df['start_price'] - df['start_price'].rolling(window=20).mean()) / df['start_price'].rolling(window=20).std()
+        
+        # 振荡器回调特征（基于RSI）
+        df['rsi_oscillation'] = 0
+        for i in range(2, len(df)):
+            # RSI从超买/超卖区域返回
+            if df['rsi'].iloc[i-1] is not None and df['rsi'].iloc[i-2] is not None:
+                # 从超买区返回
+                if df['rsi'].iloc[i-2] > 70 and df['rsi'].iloc[i-1] <= 70 and df['rsi'].iloc[i] > df['rsi'].iloc[i-1]:
+                    df['rsi_oscillation'].iloc[i] = 1
+                # 从超卖区返回
+                elif df['rsi'].iloc[i-2] < 30 and df['rsi'].iloc[i-1] >= 30 and df['rsi'].iloc[i] < df['rsi'].iloc[i-1]:
+                    df['rsi_oscillation'].iloc[i] = -1
 
         # 5. 目标变量（实战核心：方向+时长+幅度+反转）
         # 涨跌方向
@@ -994,7 +1058,10 @@ class M1DataAnalyzerAndTrainer:
             'euro_breaks_asian_high', 'euro_breaks_asian_low', 
             'us_breaks_asian_high', 'us_breaks_asian_low',
             'new_high', 'new_low', 'breaks_resistance', 'breaks_support', 
-            'break_validity', 'high_volume_on_breakout', 'rsi_confirmation'
+            'break_validity', 'high_volume_on_breakout', 'rsi_confirmation',
+            'price_retrace_ratio', 'deep_retrace', 'shallow_retrace', 
+            'momentum_divergence', 'macd_histogram', 'macd_hist_change',
+            'price_ma_distance', 'rsi_oscillation'
         ]
         
         # 添加成交量相关特征
@@ -1142,7 +1209,22 @@ class M1DataAnalyzerAndTrainer:
         
         # 取最后一条数据的特征，预测下一个交易信号
         last_feature = self.features[-1].reshape(1, -1)
-        last_raw_data = self.raw_data.iloc[-1]
+        
+        # 确保raw_data存在且不为空
+        if len(self.raw_data) == 0:
+            print("❌ 没有可用的历史数据，无法生成交易信号")
+            return None
+        
+        # 获取最后一行数据
+        raw_last_data = self.raw_data.iloc[-1]
+        
+        # 确保raw_last_data存在
+        if raw_last_data is None:
+            print("❌ 最后一行数据为空，无法生成交易信号")
+            return None
+        
+        # 创建last_raw_data变量用于后续使用
+        last_raw_data = raw_last_data
 
         # 1. AI预测核心参数（自主判断）
         trend_pred = self.trend_model.predict(last_feature)[0]  # 0=跌，1=涨
@@ -1152,6 +1234,63 @@ class M1DataAnalyzerAndTrainer:
         if self.reversal_model is not None:
             reversal_prob = self.reversal_model.predict_proba(last_feature)[0][1] * 100  # 反转概率
             reversal_pred = self.reversal_model.predict(last_feature)[0]  # 1=反转，0=延续
+            
+            # 增强反转检测逻辑：结合RSI、布林带等技术指标
+            rsi_value = raw_last_data.get('rsi', None)
+            bb_position = raw_last_data.get('bb_position', None)
+            
+            # 如果RSI超买或超卖，增加反转概率
+            if rsi_value is not None:
+                if rsi_value > 70:  # 超买区域
+                    reversal_prob += 15  # 增加反转概率
+                    reversal_prob = min(reversal_prob, 100)  # 限制最大值
+                elif rsi_value < 30:  # 超卖区域
+                    reversal_prob += 15  # 增加反转概率
+                    reversal_prob = min(reversal_prob, 100)  # 限制最大值
+            
+            # 如果价格接近布林带上轨或下轨，增加反转概率
+            if bb_position is not None:
+                if bb_position > 0.8:  # 接近上轨
+                    reversal_prob += 10  # 增加反转概率
+                    reversal_prob = min(reversal_prob, 100)  # 限制最大值
+                elif bb_position < 0.2:  # 接近下轨
+                    reversal_prob += 10  # 增加反转概率
+                    reversal_prob = min(reversal_prob, 100)  # 限制最大值
+            
+            # 新增：增强回调识别逻辑
+            # 检查深度回调特征
+            deep_retrace = raw_last_data.get('deep_retrace', 0)
+            if deep_retrace == 1:
+                reversal_prob += 20  # 深度回调增加反转概率
+                reversal_prob = min(reversal_prob, 100)
+            
+            # 检查动量背离
+            momentum_div = raw_last_data.get('momentum_divergence', 0)
+            if momentum_div != 0:  # 存在动量背离
+                reversal_prob += 25  # 动量背离显著增加反转概率
+                reversal_prob = min(reversal_prob, 100)
+            
+            # 检查MACD柱状图变化
+            macd_hist_change = raw_last_data.get('macd_hist_change', 0)
+            current_trend = raw_last_data.get('trend_direction', 0)
+            if current_trend == 1 and macd_hist_change < 0:  # 上升趋势中MACD柱状图下降
+                reversal_prob += 10
+                reversal_prob = min(reversal_prob, 100)
+            elif current_trend == 0 and macd_hist_change > 0:  # 下降趋势中MACD柱状图上升
+                reversal_prob += 10
+                reversal_prob = min(reversal_prob, 100)
+            
+            # 检查RSI振荡特征
+            rsi_osc = raw_last_data.get('rsi_oscillation', 0)
+            if rsi_osc != 0:  # RSI从极端区域返回
+                reversal_prob += 12
+                reversal_prob = min(reversal_prob, 100)
+            
+            # 检查价格与移动平均线距离
+            ma_dist = raw_last_data.get('price_ma_distance', 0)
+            if (current_trend == 1 and ma_dist > 2) or (current_trend == 0 and ma_dist < -2):  # 远离移动平均线
+                reversal_prob += 15  # 远离均线可能引发回调
+                reversal_prob = min(reversal_prob, 100)
         else:
             # 如果反转模型不存在，使用默认值
             reversal_prob = 0  # 默认反转概率为0
@@ -1206,7 +1345,8 @@ class M1DataAnalyzerAndTrainer:
             "持仓时长(分钟)": round(duration_pred, 0),
             "交易方向": trend_str,
             "趋势反转概率(%)": round(reversal_prob, 1),
-            "开仓价格": round(last_raw_data['start_price'], 2),
+            # 根据用户偏好，不显示入场价格信息
+            # "开仓价格": round(last_raw_data['start_price'], 2),
             "止盈幅度(美元)": round(amplitude_pred, 2),
             "止损幅度(美元)": round(stop_loss_amplitude, 2),
             "置信度(%)": round(trend_confidence, 1),
@@ -1287,6 +1427,61 @@ class M1DataAnalyzerAndTrainer:
                 print(f"   ⚠️  RSI值为 {rsi_value:.2f}，市场可能超买")
             elif rsi_value < 30:
                 print(f"   ⚠️  RSI值为 {rsi_value:.2f}，市场可能超卖")
+        
+        # 新增：回调和市场状态分析
+        print(f"\n🔍 AI市场状态分析:")
+        
+        # 分析深度回调
+        deep_retrace = raw_last_data.get('deep_retrace', 0)
+        if deep_retrace == 1:
+            print(f"   🔄 检测到深度回调模式，趋势反转可能性较高")
+        
+        # 分析动量背离
+        momentum_div = raw_last_data.get('momentum_divergence', 0)
+        if momentum_div == 1:
+            print(f"   📊 检测到看涨动量背离，可能预示趋势底部")
+        elif momentum_div == -1:
+            print(f"   📊 检测到看跌动量背离，可能预示趋势顶部")
+        
+        # 分析MACD柱状图变化
+        macd_hist_change = raw_last_data.get('macd_hist_change', 0)
+        current_trend = raw_last_data.get('trend_direction', 0)
+        if current_trend == 1 and macd_hist_change < 0:
+            print(f"   📈 上升趋势中MACD柱状图收缩，上升动能减弱")
+        elif current_trend == 0 and macd_hist_change > 0:
+            print(f"   📉 下降趋势中MACD柱状图扩张，下降动能增强")
+        
+        # 分析RSI振荡
+        rsi_osc = raw_last_data.get('rsi_oscillation', 0)
+        if rsi_osc == 1:
+            print(f"   📈 RSI从超卖区域回升，可能预示反弹")
+        elif rsi_osc == -1:
+            print(f"   📉 RSI从超买区域回落，可能预示回调")
+        
+        # 分析价格与移动平均线距离
+        ma_dist = raw_last_data.get('price_ma_distance', 0)
+        if abs(ma_dist) > 2:
+            if ma_dist > 0:
+                print(f"   📈 价格远离移动平均线上方，存在回调压力")
+            else:
+                print(f"   📉 价格远离移动平均线下方，存在反弹动力")
+        
+        # 市场状态总结
+        market_state = ""
+        if trend_pred == 1:
+            market_state = "📈 顺势做多"
+        else:
+            market_state = "📉 顺势做空"
+        
+        if reversal_prob > 70:
+            market_state += " (警惕反转)"
+        elif reversal_prob < 30:
+            market_state += " (趋势强劲)"
+        else:
+            market_state += " (趋势不确定)"
+        
+        print(f"\n📋 市场状态: {market_state}")
+        print(f"   预测依据: 模型置信度{trend_confidence:.1f}%, 反转概率{reversal_prob:.1f}%, 风险收益比{risk_reward:.2f}")
         
         # 实战下单建议
         if signal_valid:

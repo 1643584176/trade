@@ -1168,7 +1168,7 @@ class XAUUSDM1RealTimeTrader:
                 print(f"⚠️ 检测到反向信号({direction})，与当前持仓方向({existing_direction})相反，先平掉现有持仓")
                 
                 # 执行平仓
-                close_success = self.close_position_directly(existing_position, "反向开仓", 0)  # 临时利润为0，实际盈亏会在close_position中计算
+                close_success = self.close_position_directly(existing_position, "", 0)  # 临时利润为0，实际盈亏会在close_position中计算
                 if close_success:
                     print(f"✅ 原{existing_direction}持仓已平仓，准备开立{direction}新仓")
                     # 等待一段时间确保平仓完成
