@@ -108,26 +108,10 @@ class M1DataAnalyzerAndTrainer:
         # 检查交易品种
         symbol = "XAUUSD"
         symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
-            print(f"❌ 品种 {symbol} 不可用")
-            mt5.shutdown()
-            return None
-
-        if not symbol_info.visible:
-            print(f"✅ 启用品种 {symbol}...")
-            if not mt5.symbol_select(symbol, True):
-                print(f"❌ 启用品种失败")
-                mt5.shutdown()
-                return None
-
-        print(f"✅ 品种 {symbol} 已就绪")
 
         # 计算时间范围
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
-
-        # print(f"📅 请求时间范围: {start_date.strftime('%Y-%m-%d %H:%M:%S')} 到 {end_date.strftime('%Y-%m-%d %H:%M:%S')}")
-
         # 获取M1数据
         rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_date, end_date)
 
@@ -159,7 +143,7 @@ class M1DataAnalyzerAndTrainer:
         # 选择需要的列
         df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'spread']]
 
-        print(f"✅ 获取到 {len(df)} 根M1 K线数据")
+
         print(f"📊 实际时间范围: {df['timestamp'].iloc[0]} 到 {df['timestamp'].iloc[-1]}")
 
         # 检查数据的连续性
@@ -323,8 +307,6 @@ class M1DataAnalyzerAndTrainer:
 
     def analyze_trends(self, data):
         """分析趋势"""
-        print(f"\n🔍 开始分析趋势...")
-
         if len(data) < 2:
             print("⚠️  数据量不足，无法进行趋势分析")
             return
@@ -1056,7 +1038,7 @@ class M1DataAnalyzerAndTrainer:
         else:
             # 如果反转标签都相同，创建一个常量预测器
             self.reversal_model = None
-            print(f"🔄 趋势反转模型：数据集中所有反转标签相同，无法训练分类模型")
+
             print(f"   所有反转标签值为: {unique_reversal_labels[0]}")
 
         X_train_dur, X_test_dur, y_train_dur, y_test_dur = train_test_split(
@@ -1308,27 +1290,18 @@ class M1DataAnalyzerAndTrainer:
         
         # 实战下单建议
         if signal_valid:
-            print("\n📝 实战下单建议：")
-            print(f"   1. 开仓时间：{open_time_str}")
-            print(f"   2. 交易时段：{session}")
-            print(f"   3. 交易方向：{trend_str} 黄金M1")
-            print(f"   4. 开仓价格：{round(last_raw_data['start_price'], 2)} 美元")
-            print(
-                f"   5. 止盈设置：{round(last_raw_data['start_price'] + (amplitude_pred if trend_pred == 1 else -amplitude_pred), 2)} 美元")
-            print(
-                f"   6. 止损设置：{round(last_raw_data['start_price'] - (stop_loss_amplitude if trend_pred == 1 else -stop_loss_amplitude), 2)} 美元")
-            print(f"   7. 平仓时间：{close_time.strftime('%Y-%m-%d %H:%M')}（或达到止盈/止损立即平仓）")
+            print(f"\n📝 实战下单建议：开仓时间：{open_time_str} | 交易时段：{session} | 交易方向：{trend_str}黄金M1 | 开仓价格：{round(last_raw_data['start_price'], 2)}美元 | 止盈设置：{round(last_raw_data['start_price'] + (amplitude_pred if trend_pred == 1 else -amplitude_pred), 2)}美元 | 止损设置：{round(last_raw_data['start_price'] - (stop_loss_amplitude if trend_pred == 1 else -stop_loss_amplitude), 2)}美元 | 平仓时间：{close_time.strftime('%Y-%m-%d %H:%M')}（或达到止盈/止损立即平仓）")
             
             if reversal_pred == 1 and reversal_prob > 70:
-                print(f"   ⚠️  特别提醒：趋势反转概率高达 {reversal_prob}%，请注意市场可能的变化！")
+                print(f"⚠️ 特别提醒：反转概率{reversal_prob}%，注意市场变化！")
             
             # 基于特征的持仓建议
             if reversal_prob > 70:
-                print(f"   💡 持仓建议：由于反转概率较高({reversal_prob}%)，建议提前减仓或设置更紧密的止损")
+                print(f"💡 持仓建议：反转概率高({reversal_prob}%)，建议提前减仓或收紧止损")
             elif reversal_prob < 30:
-                print(f"   💡 持仓建议：趋势延续性强，可适当持有")
+                print(f"💡 持仓建议：趋势延续性强，可适当持有")
             else:
-                print(f"   💡 持仓建议：趋势方向不确定，注意风险管理")
+                print(f"💡 持仓建议：趋势方向不确定，注意风险管理")
                 
         # 返回最新生成的信号
         return self.trading_signals[-1] if self.trading_signals else None
