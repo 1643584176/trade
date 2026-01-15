@@ -1694,13 +1694,7 @@ class XAUUSDM1RealTimeTrader:
                     print(f"     #{i+1} {pos['direction']} 暂无法计算盈亏")
         else:
             print("   持仓详情: 无")
-        
-        print(f"   交易历史: {len(self.trade_history)}笔")
-        if self.trade_history:
-            recent_trades = self.trade_history[-3:]  # 显示最近3笔交易
-            for trade in recent_trades:
-                print(f"     {trade['close_time'].strftime('%H:%M:%S')} {trade['direction']} {trade['profit']:+.2f}$ ({trade['reason']})")
-    
+
     def run_trading_cycle(self):
         """运行交易循环"""
         while not self.stop_event.is_set():

@@ -314,6 +314,23 @@ class M1DataAnalyzerAndTrainer:
         # 计算价格变化率
         data['change_pct'] = data['close'].pct_change()
 
+        # 计算ATR（平均真实波幅）
+        data['high_low'] = data['high'] - data['low']
+        data['high_close'] = abs(data['high'] - data['close'].shift(1))
+        data['low_close'] = abs(data['low'] - data['close'].shift(1))
+        data['true_range'] = data[['high_low', 'high_close', 'low_close']].max(axis=1)
+        atr_period = 14  # ATR周期
+        data['ATR'] = data['true_range'].rolling(window=atr_period).mean()
+        
+        # 计算ATR倍数相关特征
+        data['price_change_abs'] = abs(data['close'] - data['open'])  # K线实体绝对变化
+        data['atr_multiple'] = data['price_change_abs'] / data['ATR']  # 价格变化是ATR的多少倍
+        
+        # 输出当前ATR值
+        current_atr = data['ATR'].iloc[-1] if not pd.isna(data['ATR'].iloc[-1]) else 0
+        # 注释掉ATR输出，因为用户不想看到
+        # print(f"📊 当前ATR值: {current_atr:.5f}")
+
         # 使用更精确的趋势识别方法 - 类似M1线性图的方式
         threshold = 0.0005  # 0.05% 作为趋势识别阈值
 
@@ -753,6 +770,154 @@ class M1DataAnalyzerAndTrainer:
         else:
             print("   未识别到明显趋势")
 
+        # 分析各时段反转点特性
+        self.analyze_session_reversal_characteristics(data)
+        
+        # 分析来回波动模式（震荡行情）
+        self.analyze_oscillation_patterns(data)
+        
+        # 分析价格波动接近10的倍数的模式
+        self.analyze_round_number_patterns(data)
+        
+        # ATR与价格变动关系分析
+        if 'ATR' in data.columns and len(data) > 0:
+            # 分析ATR与价格变动的倍数关系
+            atr_multiples = data['atr_multiple'].dropna()
+            if len(atr_multiples) > 0:
+                # 统计不同ATR倍数区间的出现频率
+                atr_bins = [0, 1, 2, 3, 5, float('inf')]
+                atr_labels = ['微幅(0-1倍)', '小幅(1-2倍)', '中幅(2-3倍)', '大幅(3-5倍)', '巨幅(>5倍)']
+                atr_categories = pd.cut(atr_multiples, bins=atr_bins, labels=atr_labels)
+                atr_counts = atr_categories.value_counts()
+                
+                # 计算不同交易时段的ATR倍数特征
+                data_with_sessions = data.copy()
+                data_with_sessions['hour'] = data_with_sessions['timestamp'].dt.hour
+                
+                # 定义交易时段
+                asian_mask = (data_with_sessions['hour'] >= 0) & (data_with_sessions['hour'] <= 8)
+                europe_mask = (data_with_sessions['hour'] >= 9) & (data_with_sessions['hour'] <= 17)
+                us_mask = ((data_with_sessions['hour'] >= 18) & (data_with_sessions['hour'] <= 23)) | \
+                          ((data_with_sessions['hour'] >= 0) & (data_with_sessions['hour'] <= 5))
+                
+                # 为数据添加时段标记，供后续分析使用
+                def get_session_label(hour):
+                    if 0 <= hour <= 8:
+                        return '亚盘'
+                    elif 9 <= hour <= 17:
+                        return '欧盘'
+                    else:
+                        return '美盘'
+                
+                data['session'] = data_with_sessions['hour'].apply(get_session_label)
+            
+            # 分析日内价格变动模式（类似您提到的“下跌然后拉回来，然后继续下跌”的模式）
+            # 查找连续的价格变动模式
+            price_changes = data['close'].diff().dropna()
+            atr_values = data['ATR'].dropna()
+            
+            # 确保数据长度一致
+            min_len = min(len(price_changes), len(atr_values))
+            price_changes = price_changes.tail(min_len)
+            atr_values = atr_values.tail(min_len)
+            
+            # 计算价格变动与ATR的关系
+            change_ratios = abs(price_changes.values) / atr_values.values
+            
+            # 找出典型的震荡模式
+            up_down_patterns = []
+            down_up_patterns = []
+            
+            for i in range(1, len(change_ratios)-1):
+                # 检查是否为下跌-上涨-下跌模式（或上涨-下跌-上涨模式）
+                if i+2 < len(change_ratios):
+                    ch1, ch2, ch3 = price_changes.iloc[i-1], price_changes.iloc[i], price_changes.iloc[i+1]
+                    r1, r2, r3 = change_ratios[i-1], change_ratios[i], change_ratios[i+1]
+                    
+                    # 下跌-上涨-下跌模式（日内震荡）
+                    if ch1 < 0 and ch2 > 0 and ch3 < 0 and r1 > 0.5 and r2 > 0.5 and r3 > 0.5:  # 大于0.5ATR的变动
+                        up_down_patterns.append((ch1, ch2, ch3, r1, r2, r3))
+                    # 上涨-下跌-上涨模式（日内震荡）
+                    elif ch1 > 0 and ch2 < 0 and ch3 > 0 and r1 > 0.5 and r2 > 0.5 and r3 > 0.5:  # 大于0.5ATR的变动
+                        down_up_patterns.append((ch1, ch2, ch3, r1, r2, r3))
+            
+            # 识别连续的同向波动模式（例如：下跌-回调-继续下跌）
+            consecutive_patterns = []
+            for i in range(2, len(change_ratios)-1):
+                if i+3 < len(change_ratios):
+                    ch1, ch2, ch3, ch4 = price_changes.iloc[i-2], price_changes.iloc[i-1], price_changes.iloc[i], price_changes.iloc[i+1]
+                    r1, r2, r3, r4 = change_ratios[i-2], change_ratios[i-1], change_ratios[i], change_ratios[i+1]
+                    
+                    # 下跌-回调-继续下跌模式
+                    if ch1 < 0 and ch2 > 0 and ch3 < 0 and ch4 < 0:  # 两次下跌中间有一次回调
+                        if r1 > 0.5 and r2 > 0.3 and r3 > 0.5 and r4 > 0.5:  # 至少达到一定ATR倍数
+                            consecutive_patterns.append(('下跌-回调-下跌', [ch1, ch2, ch3, ch4], [r1, r2, r3, r4]))
+                    # 上涨-回调-继续上涨模式
+                    elif ch1 > 0 and ch2 < 0 and ch3 > 0 and ch4 > 0:  # 两次上涨中间有一次回调
+                        if r1 > 0.5 and r2 > 0.3 and r3 > 0.5 and r4 > 0.5:  # 至少达到一定ATR倍数
+                            consecutive_patterns.append(('上涨-回调-上涨', [ch1, ch2, ch3, ch4], [r1, r2, r3, r4]))
+            
+            # 分析价格波动幅度接近10的倍数的模式
+            # 检查趋势机会中价格变化是否接近10的倍数
+            if hasattr(self, 'significant_opportunities'):
+                round_number_patterns = []
+                for opp in self.significant_opportunities:
+                    total_change = abs(opp['total_change'])
+                    # 检查是否接近10的倍数（如5、10、15、20、25、30等）
+                    if total_change > 2:  # 只考虑有意义的变动
+                        # 计算与最近的10的倍数的差距
+                        rounded_to_10 = round(total_change / 10) * 10
+                        difference = abs(total_change - rounded_to_10)
+                        ratio = difference / total_change if total_change != 0 else float('inf')
+                        
+                        # 如果变动接近10的倍数（差异在10%以内）
+                        if ratio <= 0.1 or difference <= 1.5:
+                            round_number_patterns.append({
+                                'start_time': opp['start_time'],
+                                'end_time': opp['end_time'],
+                                'actual_change': total_change,
+                                'rounded_change': rounded_to_10,
+                                'difference': difference,
+                                'type': opp['type']
+                            })
+                
+                # 保存圆数模式信息
+                self.round_number_patterns = round_number_patterns
+                
+                # 按时段统计圆数模式
+                if len(round_number_patterns) > 0:
+                    data_with_sessions = data.copy()
+                    data_with_sessions['hour'] = data_with_sessions['timestamp'].dt.hour
+                    
+                    def get_session(hour):
+                        if 0 <= hour <= 8:
+                            return '亚盘'
+                        elif 9 <= hour <= 17:
+                            return '欧盘'
+                        else:
+                            return '美盘'
+                    
+                    data_with_sessions['session'] = data_with_sessions['hour'].apply(get_session)
+                    
+                    session_round_patterns = {}
+                    for session in ['亚盘', '欧盘', '美盘']:
+                        session_patterns = [p for p in round_number_patterns 
+                                          if p['start_time'].hour >= 0 and (
+                                              (session == '亚盘' and 0 <= p['start_time'].hour <= 8) or
+                                              (session == '欧盘' and 9 <= p['start_time'].hour <= 17) or
+                                              (session == '美盘' and (p['start_time'].hour >= 18 or p['start_time'].hour <= 5))
+                                          )]
+                        session_round_patterns[session] = {
+                            'count': len(session_patterns),
+                            'avg_change': np.mean([p['actual_change'] for p in session_patterns]) if session_patterns else 0,
+                            'common_round_numbers': [p['rounded_change'] for p in session_patterns]
+                        }
+                    
+                    self.session_round_number_characteristics = session_round_patterns
+        
+        # 分析各时段反转点特性
+        self.analyze_session_reversal_characteristics(data)
+        
         # 计算整体变化
         if len(data) > 0:
             start_price = data['open'].iloc[0]
@@ -777,6 +942,8 @@ class M1DataAnalyzerAndTrainer:
             # self.export_to_csv(overall_df, "m1_overall_change_summary")
         
         return data
+
+
 
     def load_and_clean_data(self, csv_dir="m1_trend_analysis_results"):
         """直接使用内存中的趋势分析数据，不再从CSV加载"""
@@ -818,10 +985,41 @@ class M1DataAnalyzerAndTrainer:
         df['session_asia'] = df['hour'].apply(lambda x: 1 if 0 <= x <= 8 else 0)
         df['session_europe'] = df['hour'].apply(lambda x: 1 if 9 <= x <= 17 else 0)
         df['session_us'] = df['hour'].apply(lambda x: 1 if 18 <= x <= 23 else 0)
+        
+        # 更详细的时段特征
+        # 亚盘：00:00-08:00 UTC+2 (06:00-14:00 Beijing)
+        df['subsession_asia_open'] = df['hour'].apply(lambda x: 1 if 0 <= x <= 2 else 0)  # 亚盘开盘
+        df['subsession_asia_main'] = df['hour'].apply(lambda x: 1 if 3 <= x <= 8 else 0)  # 亚盘主时段
+        # 欧盘：09:00-17:00 UTC+2 (15:00-23:00 Beijing)
+        df['subsession_europe_open'] = df['hour'].apply(lambda x: 1 if 9 <= x <= 11 else 0)  # 欧盘开盘
+        df['subsession_europe_main'] = df['hour'].apply(lambda x: 1 if 12 <= x <= 17 else 0)  # 欧盘主时段
+        # 美盘：18:00-23:00 UTC+2 (00:00-05:00 Beijing) + 次日 00:00-05:00 UTC+2 (06:00-11:00 Beijing)
+        df['subsession_us_open'] = df['hour'].apply(lambda x: 1 if 18 <= x <= 20 else 0)  # 美盘开盘
+        df['subsession_us_main'] = df['hour'].apply(lambda x: 1 if 21 <= x <= 23 or 0 <= x <= 5 else 0)  # 美盘主时段
+        
+        # 添加星期几的详细特征
+        df['is_monday'] = (df['weekday'] == 0).astype(int)  # 周一
+        df['is_friday'] = (df['weekday'] == 4).astype(int)  # 周五
 
         # 2. 价格特征
         df['price_round'] = df['start_price'].apply(lambda x: round(x / 10) * 10)  # 价格整数位（心理关口）
         df['amplitude_ratio'] = abs(df['total_change']) / df['duration_minutes']  # 每分钟波动幅度
+        
+        # ATR相关特征
+        if 'ATR' in df.columns:
+            df['atr_value'] = df['ATR']
+            df['atr_multiple'] = abs(df['total_change']) / df['ATR']  # 价格变化是ATR的多少倍
+            df['normalized_change_by_atr'] = df['total_change'] / df['ATR']  # 标准化的趋势变化（以ATR为单位）
+        else:
+            # 如果没有ATR数据，创建虚拟列以保持特征维度一致
+            df['atr_value'] = df['start_price'] * 0.01  # 用价格的1%作为虚拟ATR
+            df['atr_multiple'] = abs(df['total_change']) / df['atr_value']
+            df['normalized_change_by_atr'] = df['total_change'] / df['atr_value']
+        
+        # ATR倍数区间特征
+        df['atr_multiple_category'] = pd.cut(df['atr_multiple'], bins=[0, 1, 2, 3, 5, float('inf')], 
+                                           labels=['微幅(0-1倍)', '小幅(1-2倍)', '中幅(2-3倍)', '大幅(3-5倍)', '巨幅(>5倍)'])
+        df = pd.get_dummies(df, columns=['atr_multiple_category'], prefix='atr_mult')
 
         # 3. 成交量特征（如果存在）
         if 'avg_volume' in df.columns:
@@ -1052,6 +1250,10 @@ class M1DataAnalyzerAndTrainer:
         # 6. 特征筛选（只保留数值特征用于训练）
         feature_cols = [
             'hour', 'weekday', 'session_asia', 'session_europe', 'session_us',
+            'subsession_asia_open', 'subsession_asia_main',
+            'subsession_europe_open', 'subsession_europe_main',
+            'subsession_us_open', 'subsession_us_main',
+            'is_monday', 'is_friday',
             'start_price', 'price_round', 'amplitude_ratio', 'rolling_amplitude',
             'consecutive_same_trend', 'trend_duration_ma', 'trend_strength',
             'price_deviation', 'rsi', 'bb_position', 'volatility',
@@ -1061,7 +1263,12 @@ class M1DataAnalyzerAndTrainer:
             'break_validity', 'high_volume_on_breakout', 'rsi_confirmation',
             'price_retrace_ratio', 'deep_retrace', 'shallow_retrace', 
             'momentum_divergence', 'macd_histogram', 'macd_hist_change',
-            'price_ma_distance', 'rsi_oscillation'
+            'price_ma_distance', 'rsi_oscillation',
+            # ATR相关特征
+            'atr_value', 'atr_multiple', 'normalized_change_by_atr',
+            # ATR倍数类别特征（经过get_dummies处理后）
+            'atr_mult_微幅(0-1倍)', 'atr_mult_小幅(1-2倍)', 'atr_mult_中幅(2-3倍)', 
+            'atr_mult_大幅(3-5倍)', 'atr_mult_巨幅(>5倍)'
         ]
         
         # 添加成交量相关特征
@@ -1229,6 +1436,122 @@ class M1DataAnalyzerAndTrainer:
         trend_pred = self.trend_model.predict(last_feature)[0]  # 0=跌，1=涨
         trend_confidence = self.trend_model.predict_proba(last_feature)[0][trend_pred] * 100  # 置信度
         
+        # ATR相关分析，用于调整信号置信度
+        if 'atr_value' in raw_last_data and 'atr_multiple' in raw_last_data:
+            current_atr = raw_last_data['atr_value']
+            current_atr_multiple = raw_last_data['atr_multiple']
+            
+            # 根据ATR倍数调整信号置信度
+            if current_atr_multiple > 3:
+                # ATR倍数过高，可能面临回调风险，降低置信度
+                trend_confidence *= 0.9
+            elif current_atr_multiple < 0.5:
+                # ATR倍数过低，可能缺乏足够动能，适度降低置信度
+                trend_confidence *= 0.95
+        
+        # 利用时段反转特性辅助交易决策
+        if hasattr(self, 'session_reversal_characteristics'):
+            # 获取当前时段
+            current_hour = raw_last_data['start_time'].hour
+            if 0 <= current_hour <= 8:
+                current_session = '亚盘'
+            elif 9 <= current_hour <= 17:
+                current_session = '欧盘'
+            else:
+                current_session = '美盘'
+            
+            # 获取当前时段的反转特性
+            if current_session in self.session_reversal_characteristics:
+                session_info = self.session_reversal_characteristics[current_session]
+                reversal_count = session_info['reversal_count']
+                avg_prev_atr_mult = session_info['avg_prev_atr_multiple']
+                success_rate = session_info['success_rate']
+                avg_reversal_strength = session_info['avg_reversal_strength']
+                
+                # 根据时段反转特性调整反转概率
+                if reversal_count > 0:  # 如果该时段有反转记录
+                    # 如果当前ATR倍数高于该时段平均反转前的ATR倍数，可能更容易出现反转
+                    if 'atr_multiple' in raw_last_data and raw_last_data['atr_multiple'] > avg_prev_atr_mult * 1.2:
+                        reversal_prob += 15  # 增加反转概率
+                    
+                    # 如果该时段反转成功率较低，也增加反转概率
+                    if success_rate < 0.4:
+                        reversal_prob += 10
+                    
+                    # 如果当前时段平均反转强度较高，也适当调整
+                    if avg_reversal_strength > 2.0:
+                        reversal_prob += 8
+        
+        # 利用震荡模式信息辅助交易决策
+        if hasattr(self, 'session_oscillation_characteristics'):
+            current_hour = raw_last_data['start_time'].hour
+            if 0 <= current_hour <= 8:
+                current_session = '亚盘'
+            elif 9 <= current_hour <= 17:
+                current_session = '欧盘'
+            else:
+                current_session = '美盘'
+            
+            # 检查当前时段的震荡特性
+            if current_session in self.session_oscillation_characteristics:
+                osc_info = self.session_oscillation_characteristics[current_session]
+                osc_count = osc_info['count']
+                avg_strength = osc_info['avg_strength']
+                avg_duration = osc_info['avg_duration']
+                
+                # 如果当前时段震荡频繁，增加反转概率
+                if osc_count > 5:  # 震荡模式较多
+                    reversal_prob += 12
+                
+                # 如果震荡强度较高，也增加反转概率
+                if avg_strength > 2.5:
+                    reversal_prob += 10
+                
+                # 如果震荡持续时间较长，也适当调整
+                if avg_duration > 10:
+                    reversal_prob += 5
+        
+        # 根据震荡模式调整趋势预测置信度
+        if hasattr(self, 'oscillation_patterns') and len(self.oscillation_patterns) > 0:
+            # 检查最近是否有强烈的震荡模式
+            recent_oscillations = [p for p in self.oscillation_patterns 
+                                 if (raw_last_data['start_time'] - p['end_time']).total_seconds() / 60 < 60]  # 1小时内
+            if len(recent_oscillations) > 0:
+                avg_recent_strength = np.mean([p['strength'] for p in recent_oscillations])
+                if avg_recent_strength > 3.0:  # 强烈震荡
+                    # 在强烈震荡后，趋势信号的可靠性可能降低
+                    trend_confidence *= 0.85
+        
+        # 利用价格波动接近10的倍数的模式辅助交易决策
+        if hasattr(self, 'round_number_patterns'):
+            # 检查最近的圆数模式
+            recent_round_patterns = [p for p in self.round_number_patterns 
+                                  if (raw_last_data['start_time'] - p['end_time']).total_seconds() / 3600 < 4]  # 4小时内
+            
+            if len(recent_round_patterns) > 0:
+                # 如果最近有波动接近10的倍数，这可能意味着市场在遵循某种规律
+                # 增加对趋势延续或反转的分析
+                avg_recent_round_change = np.mean([p['actual_change'] for p in recent_round_patterns])
+                
+                # 如果最近的波动幅度接近10的倍数，可能表明市场有规律性
+                if avg_recent_round_change > 0:
+                    # 检查当前价格与最近的10的倍数的距离
+                    current_price = raw_last_data['start_price']
+                    rounded_price = round(current_price / 10) * 10
+                    price_to_round = abs(current_price - rounded_price)
+                    
+                    # 如果价格接近10的倍数，可能有支撑或阻力
+                    if price_to_round < 0.5:  # 接近10的倍数
+                        # 增加反转概率，因为价格可能在10的倍数处遇到阻力或支撑
+                        reversal_prob += 12
+                    
+                    # 如果当前ATR倍数与圆数模式相符，可以提高置信度
+                    if 'atr_multiple' in raw_last_data:
+                        current_atr_mult = raw_last_data['atr_multiple']
+                        if 1.0 <= current_atr_mult <= 3.0:  # 中等ATR倍数，可能符合圆数模式
+                            # 这种情况下，趋势可能更可靠
+                            trend_confidence *= 1.05  # 小幅提升置信度
+        
         # 新增：预测趋势反转概率（处理模型可能为None的情况）
         if self.reversal_model is not None:
             reversal_prob = self.reversal_model.predict_proba(last_feature)[0][1] * 100  # 反转概率
@@ -1300,8 +1623,11 @@ class M1DataAnalyzerAndTrainer:
 
         # 2. 风控过滤（不符合条件的信号直接丢弃）
         duration_pred = np.clip(duration_pred, MIN_TREND_DURATION, MAX_TREND_DURATION)  # 限制时长
-        stop_loss_amplitude = amplitude_pred * STOP_LOSS_RATIO  # 止损幅度
-        risk_reward = amplitude_pred / stop_loss_amplitude  # 风险收益比
+        # 调整止盈止损幅度，使其更适合实际交易
+        # 由于AI预测的幅度较小，我们将其放大以适应实际市场波动
+        adjusted_amplitude_pred = amplitude_pred * 1.5  # 将预测幅度放大1.5倍
+        stop_loss_amplitude = adjusted_amplitude_pred * STOP_LOSS_RATIO  # 止损幅度
+        risk_reward = adjusted_amplitude_pred / stop_loss_amplitude  # 风险收益比
 
         # 3. 计算具体交易时间 - 使用最新的M1时间
         # 使用最新M1数据时间的下一分钟作为开仓时间
@@ -1346,7 +1672,7 @@ class M1DataAnalyzerAndTrainer:
             "趋势反转概率(%)": round(reversal_prob, 1),
             # 根据用户偏好，不显示入场价格信息
             # "开仓价格": round(last_raw_data['start_price'], 2),
-            "止盈幅度(美元)": round(amplitude_pred, 2),
+            "止盈幅度(美元)": round(adjusted_amplitude_pred, 2),
             "止损幅度(美元)": round(stop_loss_amplitude, 2),
             "置信度(%)": round(trend_confidence, 1),
             "风险收益比": round(risk_reward, 2),
@@ -1356,12 +1682,58 @@ class M1DataAnalyzerAndTrainer:
 
         # 打印单条信号（实战中可输出多条）
         print(
-            f"{open_time_str:<20} {round(duration_pred, 0):<10} {trend_str:<8} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {round(risk_reward, 2):<12} {valid_str:<10} {session:<10}")
+            f"{open_time_str:<20} {round(duration_pred, 0):<10} {trend_str:<8} {round(reversal_prob, 1):<12} {round(adjusted_amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {round(risk_reward, 2):<12} {valid_str:<10} {session:<10}")
 
 
         # 获取最后一条数据的特征值，分析关键突破特征
         raw_last_data = self.raw_data.iloc[-1]
         current_price = raw_last_data['start_price']
+        
+        # ATR相关分析
+        if 'atr_value' in raw_last_data and 'atr_multiple' in raw_last_data:
+            current_atr = raw_last_data['atr_value']
+            current_atr_multiple = raw_last_data['atr_multiple']
+            
+            # 根据ATR倍数调整信号置信度
+            if current_atr_multiple > 3:
+                # ATR倍数过高，可能面临回调风险，降低置信度
+                trend_confidence *= 0.9
+            elif current_atr_multiple < 0.5:
+                # ATR倍数过低，可能缺乏足够动能，适度降低置信度
+                trend_confidence *= 0.95
+        
+        # 分析相似的ATR倍数模式
+        if 'atr_multiple' in self.raw_data.columns:
+            current_atr_mult = raw_last_data['atr_multiple']
+            
+            # 寻找具有相似ATR倍数的历史模式
+            tolerance = 0.5  # ATR倍数容差
+            similar_patterns = self.raw_data[
+                (abs(self.raw_data['atr_multiple'] - current_atr_mult) <= tolerance) & 
+                (self.raw_data.index != len(self.raw_data) - 1)  # 排除当前记录
+            ]
+            
+            if len(similar_patterns) > 0:
+                # 使用相似模式信息调整反转概率
+                recent_similar = similar_patterns.tail(5)  # 获取最近的相似模式
+                
+                # 分析这些相似模式后续的表现
+                future_directions = []
+                for idx, row in recent_similar.iterrows():
+                    current_idx = self.raw_data.index.get_loc(idx)
+                    if current_idx + 1 < len(self.raw_data):
+                        next_change = self.raw_data.iloc[current_idx + 1]['total_change']
+                        future_directions.append(1 if next_change > 0 else 0)
+                
+                if future_directions:
+                    up_count = sum(future_directions)
+                    total_count = len(future_directions)
+                    up_ratio = up_count / total_count if total_count > 0 else 0
+                    
+                    # 根据历史相似模式表现调整反转概率
+                    if (trend_pred == 1 and up_ratio < 0.4) or (trend_pred == 0 and up_ratio > 0.6):
+                        # 如果当前预测方向与历史相似模式相反，则增加反转概率
+                        reversal_prob += 10
         
         # 计算支撑阻力位
         recent_prices = self.raw_data['start_price'].tail(20)
@@ -1469,6 +1841,48 @@ class M1DataAnalyzerAndTrainer:
         else:
             market_state = "📉 顺势做空"
         
+        # 检查是否存在来回波动模式（震荡行情）
+        if hasattr(self, 'significant_opportunities') and len(self.significant_opportunities) > 5:
+            # 分析最近的趋势变化频率
+            recent_opps = self.significant_opportunities[-5:]  # 最近5个机会
+            direction_changes = 0
+            prev_direction = None
+            
+            for opp in recent_opps:
+                current_direction = 1 if opp['total_change'] > 0 else 0
+                if prev_direction is not None and current_direction != prev_direction:
+                    direction_changes += 1
+                prev_direction = current_direction
+            
+            if direction_changes >= 3:  # 在最近5个机会中有3次或以上的方向变化
+                market_state += " (震荡行情)"
+                # 在震荡行情下，增加反转概率
+                reversal_prob += 15
+            
+        # 检查是否接近10的倍数价格水平
+        if hasattr(self, 'round_number_moves'):
+            current_price = raw_last_data['start_price']
+            rounded_price = round(current_price / 10) * 10
+            price_to_round = abs(current_price - rounded_price)
+            
+            if price_to_round < 0.5:  # 接近10的倍数
+                market_state += " (接近整数位)"
+                # 接近10的倍数时，可能有更强的支撑或阻力
+                reversal_prob += 10
+            
+        # 检查最近的价格变动是否接近10的倍数
+        if hasattr(self, 'significant_opportunities') and len(self.significant_opportunities) > 0:
+            latest_opps = self.significant_opportunities[-3:]  # 最近3个机会
+            for opp in latest_opps:
+                total_change = abs(opp['total_change'])
+                if total_change > 2:  # 有意义的变动
+                    rounded_change = round(total_change / 10) * 10
+                    difference = abs(total_change - rounded_change)
+                    if difference <= 1.5:  # 变动接近10的倍数
+                        market_state += " (符合圆数模式)"
+                        # 当最近的变动符合圆数模式时，可能继续遵循此模式
+                        break
+            
         if reversal_prob > 70:
             market_state += " (警惕反转)"
         elif reversal_prob < 30:
@@ -1486,6 +1900,248 @@ class M1DataAnalyzerAndTrainer:
 
         # 返回最新生成的信号
         return self.trading_signals[-1] if self.trading_signals else None
+
+    def analyze_session_reversal_characteristics(self, data):
+        """分析各时段反转点特性，用于辅助交易决策"""
+        if 'ATR' not in data.columns or len(data) == 0:
+            return
+
+        # 为数据添加时段标识
+        data_with_sessions = data.copy()
+        data_with_sessions['hour'] = data_with_sessions['timestamp'].dt.hour
+        data_with_sessions['minute'] = data_with_sessions['timestamp'].dt.minute
+        data_with_sessions['datetime'] = data_with_sessions['timestamp']
+        data_with_sessions['date'] = data_with_sessions['timestamp'].dt.date
+
+        # 定义交易时段
+        def get_session(hour):
+            if 0 <= hour <= 8:  # 亚盘
+                return '亚盘'
+            elif 9 <= hour <= 17:  # 欧盘
+                return '欧盘'
+            else:  # 美盘
+                return '美盘'
+
+        data_with_sessions['session'] = data_with_sessions['hour'].apply(get_session)
+
+        # 计算价格方向变化（识别潜在反转点）
+        data_with_sessions['price_change'] = data_with_sessions['close'] - data_with_sessions['open']
+        data_with_sessions['abs_price_change'] = abs(data_with_sessions['price_change'])
+        data_with_sessions['direction'] = np.where(data_with_sessions['price_change'] > 0, 1, -1)
+        data_with_sessions['direction_change'] = data_with_sessions['direction'].diff()
+
+        # 识别反转点（方向发生变化的位置）
+        reversal_points = data_with_sessions[
+            (data_with_sessions['direction_change'] != 0) & 
+            (data_with_sessions['ATR'] > 0)
+        ]
+
+        # 按时段统计反转特征
+        session_reversal_stats = {}
+        for session in ['亚盘', '欧盘', '美盘']:
+            session_data = data_with_sessions[data_with_sessions['session'] == session]
+            session_reversals = reversal_points[reversal_points['session'] == session]
+            
+            if len(session_reversals) > 0:
+                # 计算反转前的价格波动强度（以ATR为单位）
+                prev_atr_multiples = []
+                for rev_idx in session_reversals.index:
+                    prev_idx = rev_idx - 1
+                    if prev_idx in data_with_sessions.index:
+                        prev_row = data_with_sessions.loc[prev_idx]
+                        if 'ATR' in prev_row and prev_row['ATR'] > 0:
+                            atr_mult = prev_row['abs_price_change'] / prev_row['ATR']
+                            prev_atr_multiples.append(atr_mult)
+                
+                avg_prev_atr_mult = np.mean(prev_atr_multiples) if prev_atr_multiples else 0
+                
+                # 计算反转后趋势的持续性
+                post_trend_continuation = []
+                for rev_idx in session_reversals.index:
+                    next_idx = rev_idx + 1
+                    if next_idx in data_with_sessions.index:
+                        current_direction = data_with_sessions.loc[rev_idx, 'direction']
+                        next_direction = data_with_sessions.loc[next_idx, 'direction']
+                        # 如果下一个K线方向与反转方向相同，则认为反转成功延续
+                        if current_direction == next_direction:
+                            post_trend_continuation.append(1)
+                        else:
+                            post_trend_continuation.append(0)
+                
+                success_rate = np.mean(post_trend_continuation) if post_trend_continuation else 0
+                
+                session_reversal_stats[session] = {
+                    'reversal_count': len(session_reversals),
+                    'avg_prev_atr_multiple': avg_prev_atr_mult,
+                    'success_rate': success_rate,
+                    'avg_reversal_strength': session_reversals['atr_multiple'].mean() if len(session_reversals) > 0 and 'atr_multiple' in session_reversals.columns else 0,
+                    'timestamps': session_reversals['datetime'].tolist()
+                }
+            else:
+                session_reversal_stats[session] = {
+                    'reversal_count': 0,
+                    'avg_prev_atr_multiple': 0,
+                    'success_rate': 0,
+                    'avg_reversal_strength': 0,
+                    'timestamps': []
+                }
+
+        # 将反转特征保存到实例变量，供后续分析使用
+        self.session_reversal_characteristics = session_reversal_stats
+
+    def analyze_oscillation_patterns(self, data):
+        """分析来回波动模式（震荡行情），用于辅助交易决策"""
+        if 'ATR' not in data.columns or len(data) < 10:
+            return
+        
+        # 计算价格方向变化
+        data_copy = data.copy()
+        data_copy['price_change'] = data_copy['close'] - data_copy['open']
+        data_copy['direction'] = np.where(data_copy['price_change'] > 0, 1, -1)
+        data_copy['abs_change'] = abs(data_copy['price_change'])
+        
+        # 识别方向变化点（潜在的转折点）
+        data_copy['direction_changed'] = data_copy['direction'].diff() != 0
+        
+        # 查找连续的来回波动模式
+        oscillation_patterns = []
+        consecutive_changes = 0
+        start_idx = None
+        
+        for idx in data_copy.index:
+            if data_copy.loc[idx, 'direction_changed']:
+                if start_idx is None:
+                    start_idx = idx
+                    consecutive_changes = 1
+                else:
+                    consecutive_changes += 1
+                    
+                    # 检查是否形成了来回波动模式
+                    if consecutive_changes >= 3:  # 至少3次方向变化
+                        pattern_data = data_copy.loc[start_idx:idx]
+                        if len(pattern_data) > 0:
+                            avg_atr = pattern_data['ATR'].mean() if 'ATR' in pattern_data.columns else 0
+                            total_range = pattern_data['high'].max() - pattern_data['low'].min()
+                            pattern_duration = len(pattern_data)
+                            
+                            oscillation_patterns.append({
+                                'start_time': data_copy.loc[start_idx, 'timestamp'],
+                                'end_time': data_copy.loc[idx, 'timestamp'],
+                                'start_idx': start_idx,
+                                'end_idx': idx,
+                                'changes_count': consecutive_changes,
+                                'avg_atr': avg_atr,
+                                'total_range': total_range,
+                                'duration': pattern_duration,
+                                'strength': total_range / avg_atr if avg_atr > 0 else 0  # 波动强度
+                            })
+                    
+                    # 重置计数，但保留前一个点作为新模式的起点
+                    start_idx = data_copy.index[max(0, data_copy.index.get_loc(idx) - 1)]
+                    consecutive_changes = 1
+            else:
+                # 如果没有方向变化，重置计数
+                start_idx = None
+                consecutive_changes = 0
+        
+        # 保存震荡模式信息
+        self.oscillation_patterns = oscillation_patterns
+        
+        # 按时段统计震荡模式
+        if len(oscillation_patterns) > 0:
+            data_copy['hour'] = data_copy['timestamp'].dt.hour
+            def get_session(hour):
+                if 0 <= hour <= 8:
+                    return '亚盘'
+                elif 9 <= hour <= 17:
+                    return '欧盘'
+                else:
+                    return '美盘'
+            
+            data_copy['session'] = data_copy['hour'].apply(get_session)
+            
+            session_oscillations = {}
+            for session in ['亚盘', '欧盘', '美盘']:
+                session_patterns = [p for p in oscillation_patterns 
+                                  if data_copy.loc[p['start_idx'], 'session'] == session]
+                session_oscillations[session] = {
+                    'count': len(session_patterns),
+                    'avg_strength': np.mean([p['strength'] for p in session_patterns]) if session_patterns else 0,
+                    'avg_duration': np.mean([p['duration'] for p in session_patterns]) if session_patterns else 0
+                }
+            
+            self.session_oscillation_characteristics = session_oscillations
+
+    def analyze_round_number_patterns(self, data):
+        """分析价格波动接近10的倍数的模式，用于辅助交易决策"""
+        if len(data) < 2:
+            return
+        
+        # 计算价格变化
+        data_copy = data.copy()
+        data_copy['price_change'] = data_copy['close'] - data_copy['open']
+        data_copy['abs_price_change'] = abs(data_copy['price_change'])
+        
+        # 识别接近10的倍数的价格变动
+        round_number_moves = []
+        for idx in data_copy.index:
+            change = data_copy.loc[idx, 'abs_price_change']
+            if change > 2:  # 只考虑有意义的变动
+                # 检查是否接近10的倍数（如5、10、15、20、25、30等）
+                rounded_to_10 = round(change / 10) * 10
+                difference = abs(change - rounded_to_10)
+                ratio = difference / change if change != 0 else float('inf')
+                
+                # 如果变动接近10的倍数（差异在10%以内）
+                if ratio <= 0.1 or difference <= 1.5:
+                    round_number_moves.append({
+                        'timestamp': data_copy.loc[idx, 'timestamp'],
+                        'actual_change': change,
+                        'rounded_change': rounded_to_10,
+                        'difference': difference,
+                        'price_direction': 1 if data_copy.loc[idx, 'price_change'] > 0 else -1,
+                        'high': data_copy.loc[idx, 'high'],
+                        'low': data_copy.loc[idx, 'low'],
+                        'close': data_copy.loc[idx, 'close']
+                    })
+        
+        # 保存圆数模式信息
+        self.round_number_moves = round_number_moves
+        
+        # 按时段统计圆数模式
+        if len(round_number_moves) > 0:
+            data_copy['hour'] = data_copy['timestamp'].dt.hour
+            def get_session(hour):
+                if 0 <= hour <= 8:
+                    return '亚盘'
+                elif 9 <= hour <= 17:
+                    return '欧盘'
+                else:
+                    return '美盘'
+            
+            data_copy['session'] = data_copy['hour'].apply(get_session)
+            
+            session_round_moves = {}
+            for session in ['亚盘', '欧盘', '美盘']:
+                session_moves = [move for move in round_number_moves 
+                               if data_copy[data_copy['timestamp'] == move['timestamp']]['session'].iloc[0] == session if len(data_copy[data_copy['timestamp'] == move['timestamp']]) > 0]
+                # 修正上面的逻辑，使用更直接的方法
+                session_moves = []
+                for move in round_number_moves:
+                    move_hour = move['timestamp'].hour
+                    if (session == '亚盘' and 0 <= move_hour <= 8) or \
+                       (session == '欧盘' and 9 <= move_hour <= 17) or \
+                       (session == '美盘' and (move_hour >= 18 or move_hour <= 5)):
+                        session_moves.append(move)
+                
+                session_round_moves[session] = {
+                    'count': len(session_moves),
+                    'avg_change': np.mean([m['actual_change'] for m in session_moves]) if session_moves else 0,
+                    'common_round_numbers': list(set([m['rounded_change'] for m in session_moves])),
+                    'avg_difference': np.mean([m['difference'] for m in session_moves]) if session_moves else 0
+                }
+            
+            self.session_round_number_moves_characteristics = session_round_moves
 
     def run_full_analysis_and_training(self, days_back=60):
         """运行完整的分析和训练流程"""
