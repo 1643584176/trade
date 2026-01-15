@@ -1,5 +1,5 @@
 """
-XAUUSD M1 实时交易系统
+BTCUSD M1 实时交易系统
 基于m1_data_analyzer_and_trainer.py生成的交易信号进行实时交易
 每30秒查询一次交易信号并执行相应操作
 """
@@ -35,8 +35,8 @@ MAX_DAILY_LOSS_PERCENTAGE = 4.5  # 最大日亏损比例4.5%
 INITIAL_ACCOUNT_BALANCE = 10000  # FTMO挑战账户初始资金1万美元
 
 
-class XAUUSDM1RealTimeTrader:
-    """XAUUSD M1 实时交易系统"""
+class BTCUSDM1RealTimeTrader:
+    """BTCUSD M1 实时交易系统"""
     
     def __init__(self):
         # 初始化MT5
@@ -45,7 +45,7 @@ class XAUUSDM1RealTimeTrader:
             return None
             
         # 检查交易品种
-        self.symbol = "XAUUSD"
+        self.symbol = "BTCUSD"
         symbol_info = mt5.symbol_info(self.symbol)
         if symbol_info is None:
             print(f"❌ 品种 {self.symbol} 不可用")
@@ -67,7 +67,7 @@ class XAUUSDM1RealTimeTrader:
             return None
 
         # 交易参数
-        self.fixed_lot_size = 0.2  # 固定手数0.2手
+        self.fixed_lot_size = 0.1  # 固定手数0.1手
         # 获取今日0点0分的UTC时间戳
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -79,7 +79,7 @@ class XAUUSDM1RealTimeTrader:
         self.current_balance = self.startup_balance
         self.active_positions = []  # 活跃持仓
         self.trade_history = []  # 交易历史
-        self.magic_number = 234000  # 魔法数字
+        self.magic_number = 2000001  # 魔法数字
         
         # 添加冷却时间属性 - 用于在止盈止损后暂停交易
         self.cooling_period_until = None  # 冷却期截止时间
@@ -95,11 +95,10 @@ class XAUUSDM1RealTimeTrader:
         self.stop_event = Event()
         self.trading_disabled = False  # 交易禁用标志
         
-        # 加载AI模型和scaler
-        self.load_ai_models()
+        # 无需加载AI模型，直接从m1_data_analyzer_and_trainer.py获取信号
         
         # 信号文件路径
-        self.signals_dir = "."  # 当前目录
+        self.signals_dir = "../other"  # 当前目录
         self.last_signal_time = None
         self.current_signal = None
         
@@ -107,14 +106,14 @@ class XAUUSDM1RealTimeTrader:
         self.check_existing_positions()
         
         print("=" * 80)
-        print("💰 XAUUSD M1 实时交易系统")
+        print("💰 BTCUSD M1 实时交易系统")
         print(f"📊 程序启动时账户资金: ${self.startup_balance:.2f}")
         print(f"📊 今日初始账户资金: ${self.daily_start_balance:.2f}")
         print(f"📈 固定手数: {self.fixed_lot_size}手")
         print(f"🔮 魔法数字: {self.magic_number}")
         print(f"💸 每日最大亏损限制: {self.daily_loss_limit_percentage}% (${self.daily_loss_limit_amount:.2f})")
         print("🔄 系统将在每30秒检查一次交易信号")
-        print("🔄 请确保m1_data_analyzer_and_trainer.py已生成交易信号")
+        print(f"🔄 请确保m1_data_analyzer_and_trainer.py已生成{self.symbol}交易信号")
         
         # # 查询并显示最新一笔交易订单
         # self.get_latest_trade()
@@ -148,39 +147,42 @@ class XAUUSDM1RealTimeTrader:
             
             # 如果上面的方法没有返回结果，尝试使用时间戳
             if history_deals is None or len(history_deals) == 0:
+                print("⚠️ 使用日期时间范围查询失败，尝试使用时间戳")
                 history_deals = mt5.history_deals_get(from_timestamp, to_timestamp)
-
+                print(f"📊 使用时间戳查询结果: {history_deals}")
+            
             # 如果还是没有结果，尝试扩大搜索范围到过去24小时
             if history_deals is None or len(history_deals) == 0:
-
+                print("⚠️ 未找到今天的交易记录，尝试查询过去24小时的交易记录")
                 yesterday_start = to_time - timedelta(hours=24)
                 history_deals = mt5.history_deals_get(yesterday_start, to_time)
-
+                print(f"📊 过去24小时查询结果: {history_deals}")
+                
                 if history_deals is None or len(history_deals) == 0:
                     print("⚠️ 仍未找到交易记录，可能今天确实没有交易")
                 else:
                     # 过滤出今天的交易记录
                     today_deals = []
-
+                    print(f"📅 今天的日期: {today_start.date()}")
                     for deal in history_deals:
                         # 正确处理MT5时间戳，先转为UTC时间，再转为UTC+2
                         deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
-
+                        print(f"   检查交易时间: {deal_time.strftime('%Y-%m-%d %H:%M:%S')}, 今天日期: {today_start.date()}, 交易日期: {deal_time.date()}")
                         if deal_time.date() == today_start.date():
                             today_deals.append(deal)
-
+                            print(f"   ✅ 发现今天的交易: ID {deal.ticket}, 时间 {deal_time.strftime('%Y-%m-%d %H:%M:%S')}")
                     history_deals = today_deals
-
+                    print(f"📊 从过去24小时中过滤出今天的交易记录数量: {len(history_deals)}")
                     if len(history_deals) > 0:
                         print(f"✅ 成功找到 {len(history_deals)} 笔今天的交易记录")
             
             # 如果还是没有找到今天的交易记录，尝试使用更广泛的查询方法
             if history_deals is None or len(history_deals) == 0:
-
+                print("🔍 尝试使用更广泛的查询方法获取今天的交易记录")
                 # 尝试获取所有交易记录，然后手动过滤
                 # 首先检查历史交易总数
                 total_history_deals = mt5.history_deals_total(0, 10000)  # 获取最多10000个交易记录
-
+                print(f"📊 总历史交易数: {total_history_deals}")
                 
                 if total_history_deals > 0:
                     # 获取最近的所有交易记录
@@ -191,7 +193,7 @@ class XAUUSDM1RealTimeTrader:
                         for deal in all_deals:
                             # 将时间戳转换为UTC+2时区
                             deal_time = pd.to_datetime(deal.time, unit='s', utc=True).tz_convert(UTC_PLUS_2)
-
+                            print(f"   检查交易时间: {deal_time.strftime('%Y-%m-%d %H:%M:%S')}, 今天日期: {today_start.date()}, 交易日期: {deal_time.date()}")
                             if deal_time.date() == today_start.date():
                                 today_deals.append(deal)
                                 print(f"   ✅ 发现今天的交易: ID {deal.ticket}, 时间 {deal_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -303,7 +305,7 @@ class XAUUSDM1RealTimeTrader:
     
     def get_latest_m1_time(self):
         """获取最新的M1数据时间（UTC+2时区）"""
-        print(f"\n📡 获取XAUUSD最新M1数据时间...")
+        print(f"\n📡 获取{self.symbol}最新M1数据时间...")
         
         # 初始化MT5连接
         if not mt5.initialize():
@@ -311,23 +313,22 @@ class XAUUSDM1RealTimeTrader:
             return datetime.now(UTC_PLUS_2)  # 如果连接失败，返回UTC+2时区的当前时间
         
         # 检查交易品种
-        symbol = "XAUUSD"
-        symbol_info = mt5.symbol_info(symbol)
+        symbol_info = mt5.symbol_info(self.symbol)
         if symbol_info is None:
-            print(f"❌ 品种 {symbol} 不可用")
+            print(f"❌ 品种 {self.symbol} 不可用")
             mt5.shutdown()
             return datetime.now(UTC_PLUS_2)
 
         if not symbol_info.visible:
-            print(f"✅ 启用品种 {symbol}...")
-            if not mt5.symbol_select(symbol, True):
+            print(f"✅ 启用品种 {self.symbol}...")
+            if not mt5.symbol_select(self.symbol, True):
                 print(f"❌ 启用品种失败")
                 mt5.shutdown()
                 return datetime.now(UTC_PLUS_2)
 
         # 获取最近的M1数据
         # 只需要获取最新的1根K线
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
+        rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, 1)
         
         if rates is None or len(rates) == 0:
             print(f"❌ 未获取到最新的M1数据")
@@ -348,7 +349,7 @@ class XAUUSDM1RealTimeTrader:
     
     def get_latest_m1_data(self, count=250):
         """获取最新的M1数据"""
-        print(f"\n📡 获取XAUUSD最新M1数据...")
+        print(f"\n📡 获取{self.symbol}最新M1数据...")
         
         # 初始化MT5连接
         if not mt5.initialize():
@@ -356,22 +357,21 @@ class XAUUSDM1RealTimeTrader:
             return None
         
         # 检查交易品种
-        symbol = "XAUUSD"
-        symbol_info = mt5.symbol_info(symbol)
+        symbol_info = mt5.symbol_info(self.symbol)
         if symbol_info is None:
-            print(f"❌ 品种 {symbol} 不可用")
+            print(f"❌ 品种 {self.symbol} 不可用")
             mt5.shutdown()
             return None
 
         if not symbol_info.visible:
-            print(f"✅ 启用品种 {symbol}...")
-            if not mt5.symbol_select(symbol, True):
+            print(f"✅ 启用品种 {self.symbol}...")
+            if not mt5.symbol_select(self.symbol, True):
                 print(f"❌ 启用品种失败")
                 mt5.shutdown()
                 return None
 
         # 获取最近的M1数据
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, count)
+        rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, count)
         
         if rates is None or len(rates) == 0:
             print(f"❌ 未获取到最新的M1数据")
@@ -386,6 +386,10 @@ class XAUUSDM1RealTimeTrader:
         # 转换为UTC+2时区
         data['timestamp'] = data['timestamp'] + pd.Timedelta(hours=2)
         
+        # 过滤掉周六和周日的数据
+        data['weekday'] = data['timestamp'].dt.weekday  # 0是周一, 6是周日
+        data = data[data['weekday'] < 5]  # 只保留周一到周五(0到4)
+        
         # 重命名列
         data = data.rename(columns={
             'open': 'open',
@@ -399,7 +403,10 @@ class XAUUSDM1RealTimeTrader:
         # 选择需要的列
         data = data[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'spread']]
         
-        print(f"✅ 获取到 {len(data)} 根M1 K线数据")
+        # 删除临时的weekday列
+        data = data.drop(columns=['weekday'])
+        
+        print(f"✅ 获取到 {len(data)} 根M1 K线数据 (已过滤周末数据)")
         
         # 断开MT5连接
         mt5.shutdown()
@@ -408,7 +415,7 @@ class XAUUSDM1RealTimeTrader:
     
     def get_latest_trade(self):
         """查询最新的交易订单详情"""
-        print(f"\n📋 查询最新一笔交易订单详情...")
+        print(f"\n📋 查询最新一笔{self.symbol}交易订单详情...")
         
         # 初始化MT5连接
         if not mt5.initialize():
@@ -486,7 +493,7 @@ class XAUUSDM1RealTimeTrader:
     
     def get_today_deals_and_positions(self):
         """查询今天的交易记录和当前持仓"""
-        print(f"\n📊 查询今天的交易记录和当前持仓...")
+        print(f"\n📊 查询今天的{self.symbol}交易记录和当前持仓...")
         
         # 初始化MT5连接
         if not mt5.initialize():
@@ -580,7 +587,7 @@ class XAUUSDM1RealTimeTrader:
     
     def extract_current_features(self):
         """从当前市场数据中提取特征用于AI预测"""
-        print("🔍 提取当前市场特征...")
+        print(f"🔍 提取{self.symbol}当前市场特征...")
         
         # 获取最新的M1数据
         data = self.get_latest_m1_data(count=250)  # 获取更多数据用于特征计算
@@ -821,8 +828,8 @@ class XAUUSDM1RealTimeTrader:
             m1_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(m1_module)
             
-            # 直接调用模块中的run函数获取最新信号
-            latest_signal = m1_module.run()
+            # 直接调用模块中的run函数获取最新信号，传递交易品种
+            latest_signal = m1_module.run(symbol=self.symbol)
             
             if latest_signal is None:
                 raise Exception("❌ m1_data_analyzer_and_trainer未返回任何交易信号")
@@ -860,7 +867,6 @@ class XAUUSDM1RealTimeTrader:
             
             # 如果信号时间在未来1-5分钟内，则准备执行
             if signal_time.astimezone(UTC_PLUS_2).replace(tzinfo=None) > current_time.replace(tzinfo=None):
-
                 return latest_signal
             
             self.last_signal_time = signal_time
@@ -898,51 +904,7 @@ class XAUUSDM1RealTimeTrader:
         
         return tick.ask, tick.bid
     
-    def load_ai_models(self):
-        """加载AI模型和scaler"""
-        try:
-            # 动态导入m1_data_analyzer_and_trainer模块以获取模型
-            import os
-            import joblib
-            
-            # 查找最新的模型文件
-            model_dir = "trading_ai_models"
-            if os.path.exists(model_dir):
-                # 获取目录中所有pkl文件
-                pkl_files = [f for f in os.listdir(model_dir) if f.endswith('.pkl')]
-                
-                if pkl_files:
-                    # 按时间排序，获取最新的模型文件
-                    latest_scaler = None
-                    for file in sorted(pkl_files):
-                        if file.startswith('scaler_'):
-                            latest_scaler = file
-                        
-                    if latest_scaler:
-                        scaler_path = os.path.join(model_dir, latest_scaler)
-                        self.scaler = joblib.load(scaler_path)
-                        print(f"✅ 成功加载scaler模型: {latest_scaler}")
-                    else:
-                        # 如果没有找到scaler，创建一个新的StandardScaler
-                        from sklearn.preprocessing import StandardScaler
-                        self.scaler = StandardScaler()
-                        print("⚠️  未找到scaler模型，使用默认StandardScaler")
-                else:
-                    # 如果没有找到任何pkl文件，创建一个新的StandardScaler
-                    from sklearn.preprocessing import StandardScaler
-                    self.scaler = StandardScaler()
-                    print("⚠️  未找到任何模型文件，使用默认StandardScaler")
-            else:
-                # 如果模型目录不存在，创建一个新的StandardScaler
-                from sklearn.preprocessing import StandardScaler
-                self.scaler = StandardScaler()
-                print("⚠️  模型目录不存在，使用默认StandardScaler")
-        except Exception as e:
-            print(f"❌ 加载AI模型失败: {str(e)}")
-            # 出错时创建一个新的StandardScaler
-            from sklearn.preprocessing import StandardScaler
-            self.scaler = StandardScaler()
-            print("⚠️  使用默认StandardScaler")
+
     
     def check_loss_limits(self):
         """检查是否超过亏损限制"""
@@ -1028,15 +990,15 @@ class XAUUSDM1RealTimeTrader:
             # 查询交易记录
             all_deals = mt5.history_deals_get(start_ts, end_ts)
             
-            # 过滤XAUUSD的交易记录，只包含盈亏不为0的记录
+
             daily_profit_loss = 0  # 今日盈亏
             daily_losses = []  # 今日亏损记录（绝对值）
 
             if all_deals and len(all_deals) > 0:
                 for deal in all_deals:
-                    # 过滤XAUUSD相关品种
+
                     symbol = deal.symbol.upper()
-                    if "XAUUSD" in symbol and deal.profit != 0:  # 只添加盈亏不为0的记录
+                    if "BTCUSD" in symbol and deal.profit != 0:  # 只添加盈亏不为0的记录
                         # 累加今日盈亏
                         daily_profit_loss += deal.profit
 
@@ -1136,6 +1098,12 @@ class XAUUSDM1RealTimeTrader:
             existing_position = mt5_positions[0]  # 只处理第一个持仓
             existing_direction = '做多' if existing_position.type == mt5.POSITION_TYPE_BUY else '做空'
             
+            # 如果已有持仓，检查是否与新信号方向相同
+            if existing_direction == direction:
+                print(f"⚠️  已有{existing_direction}持仓，无法下单{direction}订单")
+                return False
+            
+            
             # 如果新信号方向与当前持仓方向相同，则不能开仓
             if existing_direction == direction:
                 # print(f"⚠️ MT5中已有{existing_direction}持仓，无法开立同方向新仓")
@@ -1176,9 +1144,6 @@ class XAUUSDM1RealTimeTrader:
             
             if existing_direction == direction:
                 print(f"⚠️ 当前已有{existing_direction}持仓，无法开立同方向新仓")
-                # 设置5分钟冷静期
-                self.cooling_period_until = datetime.now(UTC_PLUS_2) + timedelta(minutes=5)
-                print(f"⏰ 检测到同方向持仓冲突，进入5分钟冷静期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}")
                 return False
             else:
                 # 如果新信号方向与当前持仓方向相反，则先平掉当前持仓，再开新仓
@@ -1206,9 +1171,6 @@ class XAUUSDM1RealTimeTrader:
                     # 等待一段时间确保平仓完成
                     time.sleep(1)
                 else:
-                    print(f"❌ 原{existing_direction}持仓平仓失败，取消开仓")
-                    return False
-
                     print(f"❌ 原{existing_direction}持仓平仓失败，取消开仓")
                     return False
         
@@ -1341,16 +1303,14 @@ class XAUUSDM1RealTimeTrader:
                             break
                     
                     # 如果是止盈或止损平仓，则设置5分钟冷却时间
-                    # 移除此处的冷却逻辑，因为我们只在特定情况下添加冷静期
+                    if close_reason in ['止盈', '止损']:
+                        self.cooling_period_until = datetime.now(UTC_PLUS_2) + timedelta(minutes=5)
+                        print(f"⏰ 检测到{close_reason}平仓，进入5分钟冷却期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}")
                     
                 except Exception as e:
                     print(f"⚠️ 检查平仓原因时出错: {str(e)}")
                     # 出错时仍按正常流程处理
                     close_reason = "未知"
-                
-                # 添加5分钟冷静期，无论何种原因导致持仓消失
-                self.cooling_period_until = datetime.now(UTC_PLUS_2) + timedelta(minutes=5)
-                print(f"⏰ 检测到持仓单号 {position['ticket']} 被平仓，进入5分钟冷静期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}")
                 
                 positions_to_remove.append(position)
         
@@ -1485,7 +1445,12 @@ class XAUUSDM1RealTimeTrader:
         print(f"✅ {position['direction']}仓位已{reason}平仓:")
         print(f"   盈亏: ${profit:.2f}")
         print(f"   当前余额: ${self.current_balance:.2f}")
-
+        
+        # 如果是止盈或止损平仓，则设置5分钟冷却时间
+        if reason in ['止盈', '止损']:
+            self.cooling_period_until = datetime.now(UTC_PLUS_2) + timedelta(minutes=5)
+            print(f"⏰ 触发{reason}平仓，进入5分钟冷却期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}")
+        
         return True
 
     def close_position_directly(self, mt5_position, reason, profit):
@@ -1572,7 +1537,11 @@ class XAUUSDM1RealTimeTrader:
         print(f"   盈亏: ${calculated_profit:.2f}")
         print(f"   当前余额: ${self.current_balance:.2f}")
         
-
+        # 如果是止盈或止损平仓，则设置5分钟冷却时间
+        if reason in ['止盈', '止损']:
+            self.cooling_period_until = datetime.now(UTC_PLUS_2) + timedelta(minutes=5)
+            print(f"⏰ 触发{reason}平仓，进入5分钟冷却期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}")
+        
         return True
     
     def get_account_info(self):
@@ -1663,18 +1632,18 @@ class XAUUSDM1RealTimeTrader:
                         current_price = current_bid
                         # 检查是否所有必要的字段都存在
                         if 'entry_price' in pos and 'lot_size' in pos:
-                            unrealized_pnl = (current_price - pos['entry_price']) * pos['lot_size'] * 100
+                            unrealized_pnl = (current_price - pos['entry_price']) * pos['lot_size']
                         elif 'entry_price' in pos and 'volume' in pos:  # 处理现有持仓
-                            unrealized_pnl = (current_price - pos['entry_price']) * pos['volume'] * 100
+                            unrealized_pnl = (current_price - pos['entry_price']) * pos['volume']
                         else:
                             unrealized_pnl = 0
                     else:
                         current_price = current_ask
                         # 检查是否所有必要的字段都存在
                         if 'entry_price' in pos and 'lot_size' in pos:
-                            unrealized_pnl = (pos['entry_price'] - current_price) * pos['lot_size'] * 100
+                            unrealized_pnl = (pos['entry_price'] - current_price) * pos['lot_size']
                         elif 'entry_price' in pos and 'volume' in pos:  # 处理现有持仓
-                            unrealized_pnl = (pos['entry_price'] - current_price) * pos['volume'] * 100
+                            unrealized_pnl = (pos['entry_price'] - current_price) * pos['volume']
                         else:
                             unrealized_pnl = 0
                     
@@ -1777,7 +1746,7 @@ class XAUUSDM1RealTimeTrader:
 
 def main():
     """主函数"""
-    trader = XAUUSDM1RealTimeTrader()
+    trader = BTCUSDM1RealTimeTrader()
     if trader:
         trader.start_trading()
 
