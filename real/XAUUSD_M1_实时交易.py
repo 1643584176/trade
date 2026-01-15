@@ -1176,9 +1176,9 @@ class XAUUSDM1RealTimeTrader:
             
             if existing_direction == direction:
                 print(f"⚠️ 当前已有{existing_direction}持仓，无法开立同方向新仓")
-                # 设置5分钟冷静期
-                self.cooling_period_until = datetime.now(UTC_PLUS_2) + timedelta(minutes=5)
-                print(f"⏰ 检测到同方向持仓冲突，进入5分钟冷静期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}")
+                # 设置10分钟冷静期
+                self.cooling_period_until = datetime.now(UTC_PLUS_2) + timedelta(minutes=10)
+                print(f"⏰ 检测到同方向持仓冲突，进入10分钟冷静期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}")
                 return False
             else:
                 # 如果新信号方向与当前持仓方向相反，则先平掉当前持仓，再开新仓
