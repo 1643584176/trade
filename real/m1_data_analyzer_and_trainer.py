@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import warnings
 from datetime import datetime, timedelta
+import pytz
 import MetaTrader5 as mt5
 import math
 import os
@@ -96,24 +97,32 @@ class M1DataAnalyzerAndTrainer:
                         # print(f"🗑️  删除旧模型文件: {file_path}")
                     except Exception as e:
                         print(f"⚠️  删除模型文件 {file_path} 时出错: {e}")
-
+    # 修复时间问题
     def fetch_m1_data_for_period(self, days_back=60):
         """获取过去指定天数的M1数据"""
+        # 定义时区：UTC+2
+        utc2_tz = pytz.FixedOffset(120)  # UTC+2 = 120分钟偏移
 
+        # 计算时间范围（基于UTC+2时区的"过去60天"）
+        now_utc2 = datetime.now(utc2_tz)
+        end_time_utc2 = now_utc2.replace(second=0, microsecond=0)  # 取整到分钟
+        start_time_utc2 = end_time_utc2 - timedelta(days=days_back)
+
+        # 转换为UTC时间（MT5接口要求UTC时间戳）
+        start_time_utc = start_time_utc2.astimezone(pytz.UTC)
+        end_time_utc = end_time_utc2.astimezone(pytz.UTC)
+
+        # 转换为时间戳（秒级）
+        start_ts = int(start_time_utc.timestamp())
+        end_ts = int(end_time_utc.timestamp())
+        
         # 初始化MT5连接
         if not mt5.initialize():
             print(f"❌ MT5初始化失败，错误代码: {mt5.last_error()}")
             return None
 
-        # 检查交易品种
-        symbol = "XAUUSD"
-        symbol_info = mt5.symbol_info(symbol)
-
-        # 计算时间范围
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days_back)
         # 获取M1数据
-        rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_date, end_date)
+        rates = mt5.copy_rates_range("XAUUSD", mt5.TIMEFRAME_M1, start_ts, end_ts)
 
         if rates is None or len(rates) == 0:
             print(f"❌ 错误: 未获取到过去 {days_back} 天的M1数据")
@@ -123,11 +132,12 @@ class M1DataAnalyzerAndTrainer:
 
         # 转换为DataFrame
         df = pd.DataFrame(rates)
-
-        # 转换时间戳
-        df['timestamp'] = pd.to_datetime(df['time'], unit='s')
-
-        # 转换为UTC+2时区（您指定的时区）
+        
+        # 先将MT5的UTC时间戳转为UTC时区的datetime
+        df['timestamp'] = pd.to_datetime(df['time'], unit='s', utc=True)
+        # 转换为UTC+2时区
+        df['timestamp'] = df['timestamp'].dt.tz_convert(None)
+        # 保持UTC+2时区的时间，但不带时区信息
         df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=2)
 
         # 重命名列
@@ -145,20 +155,6 @@ class M1DataAnalyzerAndTrainer:
 
 
         print(f"📊 实际时间范围: {df['timestamp'].iloc[0]} 到 {df['timestamp'].iloc[-1]}")
-
-        # 检查数据的连续性
-        time_diffs = df['timestamp'].diff().dropna()
-        gaps = time_diffs[time_diffs > pd.Timedelta(minutes=5)]  # 超过5分钟的间隙
-        if len(gaps) > 0:
-            # print(f"⚠️  检测到 {len(gaps)} 个数据间隙，可能影响趋势分析")
-            # 显示最大的几个间隙
-            largest_gaps = gaps.nlargest(min(3, len(gaps)))  # 确保不超过间隙总数
-            # for idx, gap in largest_gaps.items():
-            #     if idx < len(df):  # 确保索引有效
-            #         print(f"   间隙: {gap} 在 {df['timestamp'].iloc[idx]} 附近")
-
-        # 不再导出原始数据到CSV文件
-        # print(f"✅ 原始数据处理完成")
 
         # 断开MT5连接
         mt5.shutdown()
