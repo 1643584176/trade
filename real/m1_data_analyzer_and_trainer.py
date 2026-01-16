@@ -1362,10 +1362,13 @@ class M1DataAnalyzerAndTrainer:
         return True
 
     def get_latest_m1_time(self):
+        # 定义时区：UTC+2
+        utc2_tz = pytz.FixedOffset(120)  # UTC+2 = 120分钟偏移
+        
         # 初始化MT5连接
         if not mt5.initialize():
             print(f"❌ MT5初始化失败: {mt5.last_error()}")
-            return datetime.now()  # 如果连接失败，返回当前时间
+            return datetime.now(utc2_tz)  # 如果连接失败，返回UTC+2时区的当前时间
         
         # 检查交易品种
         symbol = "XAUUSD"
@@ -1373,14 +1376,14 @@ class M1DataAnalyzerAndTrainer:
         if symbol_info is None:
             print(f"❌ 品种 {symbol} 不可用")
             mt5.shutdown()
-            return datetime.now()
+            return datetime.now(utc2_tz)
 
         if not symbol_info.visible:
             print(f"✅ 启用品种 {symbol}...")
             if not mt5.symbol_select(symbol, True):
                 print(f"❌ 启用品种失败")
                 mt5.shutdown()
-                return datetime.now()
+                return datetime.now(utc2_tz)
 
         # 获取最近的M1数据
         # 只需要获取最新的1根K线
@@ -1389,13 +1392,13 @@ class M1DataAnalyzerAndTrainer:
         if rates is None or len(rates) == 0:
             print(f"❌ 未获取到最新的M1数据")
             mt5.shutdown()
-            return datetime.now()
+            return datetime.now(utc2_tz)
         
         # 获取最新K线的时间
-        latest_time = pd.to_datetime(rates[0]['time'], unit='s')
-        
-        # print(f"✅ 最新M1数据时间: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
+        latest_time = pd.to_datetime(rates[0]['time'], unit='s', utc=True)
+        # 转换为UTC+2时区
+        latest_time = latest_time.tz_localize(None)
+
         # 断开MT5连接
         mt5.shutdown()
         

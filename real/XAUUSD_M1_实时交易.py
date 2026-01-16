@@ -95,8 +95,7 @@ class XAUUSDM1RealTimeTrader:
         self.stop_event = Event()
         self.trading_disabled = False  # 交易禁用标志
         
-        # 加载AI模型和scaler
-        self.load_ai_models()
+
         
         # 信号文件路径
         self.signals_dir = "."  # 当前目录
@@ -750,35 +749,8 @@ class XAUUSDM1RealTimeTrader:
             'volume_ma_ratio': volume_ma_ratio  # 添加成交量比率特征
         }])
         
-        # 确保特征列的顺序与训练时一致
-        if hasattr(self.scaler, 'feature_names_in_'):
-            feature_order = self.scaler.feature_names_in_
-            # 确保所有必需的特征都在features中
-            for col in feature_order:
-                if col not in features.columns:
-                    features[col] = 0  # 添加缺失的特征列，填充0
-            features = features[feature_order]  # 按照训练时的顺序重新排列
-        
-        # 使用之前加载的scaler进行标准化
-        try:
-            features_scaled = self.scaler.transform(features)
-            print("✅ 特征提取完成")
-            return features_scaled
-        except Exception as e:
-            print(f"❌ 特征标准化失败: {str(e)}")
-            # 如果特征不匹配，尝试重新排列特征顺序以匹配训练时的特征
-            try:
-                # 获取训练时的特征名称
-                feature_names = self.scaler.feature_names_in_ if hasattr(self.scaler, 'feature_names_in_') else None
-                if feature_names is not None:
-                    # 重新排列特征列以匹配训练时的顺序
-                    features = features.reindex(columns=feature_names, fill_value=0)
-                    features_scaled = self.scaler.transform(features)
-                    print("✅ 特征提取完成（已修复列顺序）")
-                    return features_scaled
-            except Exception as e2:
-                print(f"❌ 特征修复失败: {str(e2)}")
-                return None
+        print("✅ 特征提取完成")
+        return features  # 直接返回原始特征，不进行标准化
     
     
     def check_existing_positions(self):
@@ -898,51 +870,7 @@ class XAUUSDM1RealTimeTrader:
         
         return tick.ask, tick.bid
     
-    def load_ai_models(self):
-        """加载AI模型和scaler"""
-        try:
-            # 动态导入m1_data_analyzer_and_trainer模块以获取模型
-            import os
-            import joblib
-            
-            # 查找最新的模型文件
-            model_dir = "trading_ai_models"
-            if os.path.exists(model_dir):
-                # 获取目录中所有pkl文件
-                pkl_files = [f for f in os.listdir(model_dir) if f.endswith('.pkl')]
-                
-                if pkl_files:
-                    # 按时间排序，获取最新的模型文件
-                    latest_scaler = None
-                    for file in sorted(pkl_files):
-                        if file.startswith('scaler_'):
-                            latest_scaler = file
-                        
-                    if latest_scaler:
-                        scaler_path = os.path.join(model_dir, latest_scaler)
-                        self.scaler = joblib.load(scaler_path)
-                        print(f"✅ 成功加载scaler模型: {latest_scaler}")
-                    else:
-                        # 如果没有找到scaler，创建一个新的StandardScaler
-                        from sklearn.preprocessing import StandardScaler
-                        self.scaler = StandardScaler()
-                        print("⚠️  未找到scaler模型，使用默认StandardScaler")
-                else:
-                    # 如果没有找到任何pkl文件，创建一个新的StandardScaler
-                    from sklearn.preprocessing import StandardScaler
-                    self.scaler = StandardScaler()
-                    print("⚠️  未找到任何模型文件，使用默认StandardScaler")
-            else:
-                # 如果模型目录不存在，创建一个新的StandardScaler
-                from sklearn.preprocessing import StandardScaler
-                self.scaler = StandardScaler()
-                print("⚠️  模型目录不存在，使用默认StandardScaler")
-        except Exception as e:
-            print(f"❌ 加载AI模型失败: {str(e)}")
-            # 出错时创建一个新的StandardScaler
-            from sklearn.preprocessing import StandardScaler
-            self.scaler = StandardScaler()
-            print("⚠️  使用默认StandardScaler")
+
     
     def check_loss_limits(self):
         """检查是否超过亏损限制"""
