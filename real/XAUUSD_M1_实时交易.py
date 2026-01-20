@@ -157,8 +157,7 @@ class XAUUSDM1RealTimeTrader:
                 print("⚠️ 未找到今天的交易记录，尝试查询过去24小时的交易记录")
                 yesterday_start = to_time - timedelta(hours=24)
                 history_deals = mt5.history_deals_get(yesterday_start, to_time)
-                print(f"📊 过去24小时查询结果: {history_deals}")
-                
+
                 if history_deals is None or len(history_deals) == 0:
                     print("⚠️ 仍未找到交易记录，可能今天确实没有交易")
                 else:
@@ -197,7 +196,7 @@ class XAUUSDM1RealTimeTrader:
                             print(f"   检查交易时间: {deal_time.strftime('%Y-%m-%d %H:%M:%S')}, 今天日期: {today_start.date()}, 交易日期: {deal_time.date()}")
                             if deal_time.date() == today_start.date():
                                 today_deals.append(deal)
-                                print(f"   ✅ 发现今天的交易: ID {deal.ticket}, 时间 {deal_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                                # print(f"   ✅ 发现今天的交易: ID {deal.ticket}, 时间 {deal_time.strftime('%Y-%m-%d %H:%M:%S')}")
                         history_deals = today_deals
                         if len(today_deals) > 0:
                             print(f"✅ 从所有历史记录中找到 {len(today_deals)} 笔今天的交易记录")
@@ -597,9 +596,22 @@ class XAUUSDM1RealTimeTrader:
         # 计算各种技术指标
         close_prices = data['close']
         
+        # 计算移动平均线
+        sma_5 = close_prices.rolling(window=5).mean().iloc[-1] if len(close_prices) >= 5 else current_data['close']
+        sma_10 = close_prices.rolling(window=10).mean().iloc[-1] if len(close_prices) >= 10 else current_data['close']
+        sma_20 = close_prices.rolling(window=20).mean().iloc[-1] if len(close_prices) >= 20 else current_data['close']
+        
+        # 计算均线方向
+        sma_5_direction = 1 if current_data['close'] > sma_5 else 0
+        sma_10_direction = 1 if current_data['close'] > sma_10 else 0
+        sma_20_direction = 1 if current_data['close'] > sma_20 else 0
+        
         # 计算RSI
         rsi_values = self.calculate_rsi_simple(close_prices.values)
         current_rsi = rsi_values.iloc[-1] if rsi_values is not None and not pd.isna(rsi_values.iloc[-1]) else 0
+        
+        # 计算RSI方向
+        rsi_direction = 1 if current_rsi > 50 else 0
         
         # 计算布林带
         bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(close_prices)
@@ -618,13 +630,30 @@ class XAUUSDM1RealTimeTrader:
         hour = current_time.hour
         weekday = current_time.weekday()
         
+        # 一周七天标识特征
+        is_monday = 1 if weekday == 0 else 0
+        is_tuesday = 1 if weekday == 1 else 0
+        is_wednesday = 1 if weekday == 2 else 0
+        is_thursday = 1 if weekday == 3 else 0
+        is_friday = 1 if weekday == 4 else 0
+        is_saturday = 1 if weekday == 5 else 0
+        is_sunday = 1 if weekday == 6 else 0
+        
         # 交易时段特征
         session_asia = 1 if 0 <= hour <= 8 else 0
         session_europe = 1 if 9 <= hour <= 17 else 0
         session_us = 1 if 18 <= hour <= 23 else 0
         
         # 价格特征
-        price_round = round(current_data['close'] / 10) * 10  # 价格整数位（心理关口）
+        # price_round = round(current_data['close'] / 10) * 10  # 价格整数位（心理关口）
+        
+        # 计算波动幅度是否为10的倍数
+        # 使用最近价格变化来计算波动幅度
+        if len(close_prices) >= 2:
+            price_change = abs(current_data['close'] - close_prices.iloc[-2])
+            amplitude_is_multiple_of_ten = 1 if price_change % 10 < 0.1 or price_change % 10 > 9.9 else 0
+        else:
+            amplitude_is_multiple_of_ten = 0
         
         # 计算近期波动率
         recent_returns = close_prices.pct_change().tail(20).dropna()
@@ -716,6 +745,23 @@ class XAUUSDM1RealTimeTrader:
         us_breaks_asian_high = 0
         us_breaks_asian_low = 0
         
+        # 计算均线方向一致性
+        ma_direction_consistency = (
+            (sma_5_direction == sma_10_direction) + 
+            (sma_10_direction == sma_20_direction) + 
+            (sma_5_direction == sma_20_direction)
+        )
+        
+        # 计算RSI与价格方向一致性
+        # 获取前一个价格和RSI值
+        prev_price = close_prices.iloc[-2] if len(close_prices) >= 2 else current_data['close']
+        prev_rsi = close_prices.shift(1).rolling(window=14).apply(lambda x: self.calculate_rsi_simple(x.values)[-1] if len(x) >= 15 else np.nan).iloc[-2] if len(close_prices) >= 15 else current_rsi
+        
+        price_direction = 1 if current_data['close'] > prev_price else 0
+        prev_rsi_direction = 1 if prev_rsi > 50 else 0
+        
+        rsi_price_consistency = 1 if price_direction == rsi_direction else 0
+        
         # 新高新低特征
         new_high = 1 if current_data['close'] == close_prices.tail(20).max() else 0 if len(close_prices) >= 20 else 0
         new_low = 1 if current_data['close'] == close_prices.tail(20).min() else 0 if len(close_prices) >= 20 else 0
@@ -724,11 +770,24 @@ class XAUUSDM1RealTimeTrader:
         features = pd.DataFrame([{
             'hour': hour,
             'weekday': weekday,
+            'is_monday': is_monday,
+            'is_tuesday': is_tuesday,
+            'is_wednesday': is_wednesday,
+            'is_thursday': is_thursday,
+            'is_friday': is_friday,
+            'is_saturday': is_saturday,
+            'is_sunday': is_sunday,
             'session_asia': session_asia,
             'session_europe': session_europe,
             'session_us': session_us,
             'start_price': current_data['close'],
-            'price_round': price_round,
+            'amplitude_is_multiple_of_ten': amplitude_is_multiple_of_ten,
+            'sma_5_direction': sma_5_direction,
+            'sma_10_direction': sma_10_direction,
+            'sma_20_direction': sma_20_direction,
+            'rsi_direction': rsi_direction,
+            'ma_direction_consistency': ma_direction_consistency,
+            'rsi_price_consistency': rsi_price_consistency,
             'amplitude_ratio': volatility,  # 使用波动率作为振幅比率
             'rolling_amplitude': recent_changes,  # 使用近期价格变化均值作为滚动振幅
             'consecutive_same_trend': consecutive_same_trend,

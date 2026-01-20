@@ -814,13 +814,21 @@ class M1DataAnalyzerAndTrainer:
         # 1. 时间特征（交易时段是核心）
         df['hour'] = df['start_time'].dt.hour
         df['weekday'] = df['start_time'].dt.weekday
+        # 一周七天标识特征
+        df['is_monday'] = df['weekday'].apply(lambda x: 1 if x == 0 else 0)
+        df['is_tuesday'] = df['weekday'].apply(lambda x: 1 if x == 1 else 0)
+        df['is_wednesday'] = df['weekday'].apply(lambda x: 1 if x == 2 else 0)
+        df['is_thursday'] = df['weekday'].apply(lambda x: 1 if x == 3 else 0)
+        df['is_friday'] = df['weekday'].apply(lambda x: 1 if x == 4 else 0)
+        df['is_saturday'] = df['weekday'].apply(lambda x: 1 if x == 5 else 0)
+        df['is_sunday'] = df['weekday'].apply(lambda x: 1 if x == 6 else 0)
         # 区分交易时段（亚洲盘/欧盘/美盘）
         df['session_asia'] = df['hour'].apply(lambda x: 1 if 0 <= x <= 8 else 0)
         df['session_europe'] = df['hour'].apply(lambda x: 1 if 9 <= x <= 17 else 0)
         df['session_us'] = df['hour'].apply(lambda x: 1 if 18 <= x <= 23 else 0)
 
         # 2. 价格特征
-        df['price_round'] = df['start_price'].apply(lambda x: round(x / 10) * 10)  # 价格整数位（心理关口）
+        df['amplitude_is_multiple_of_ten'] = df['total_change'].apply(lambda x: 1 if abs(x) % 10 < 0.1 or abs(x) % 10 > 9.9 else 0)  # 波动幅度是否为10的倍数
         df['amplitude_ratio'] = abs(df['total_change']) / df['duration_minutes']  # 每分钟波动幅度
 
         # 3. 成交量特征（如果存在）
@@ -862,8 +870,21 @@ class M1DataAnalyzerAndTrainer:
         # 价格偏离均线的程度（可能预示反转）
         df['price_deviation'] = (df['start_price'] - df['start_price'].rolling(window=10, min_periods=1).mean()) / df['start_price'].rolling(window=10, min_periods=1).std()
         
+        # 计算移动平均线
+        df['sma_5'] = df['start_price'].rolling(window=5).mean()
+        df['sma_10'] = df['start_price'].rolling(window=10).mean()
+        df['sma_20'] = df['start_price'].rolling(window=20).mean()
+        
+        # 计算均线方向
+        df['sma_5_direction'] = np.where(df['start_price'] > df['sma_5'], 1, 0)
+        df['sma_10_direction'] = np.where(df['start_price'] > df['sma_10'], 1, 0)
+        df['sma_20_direction'] = np.where(df['start_price'] > df['sma_20'], 1, 0)
+        
         # RSI指标
         df['rsi'] = self.calculate_rsi_simple(df['start_price'].values)
+        
+        # RSI方向
+        df['rsi_direction'] = np.where(df['rsi'] > 50, 1, 0)
         
         # 布林带位置
         upper, middle, lower = self.calculate_bollinger_bands(df['start_price'])
@@ -997,6 +1018,18 @@ class M1DataAnalyzerAndTrainer:
         df['deep_retrace'] = (df['price_retrace_ratio'] > 0.5).astype(int)  # 深度回调
         df['shallow_retrace'] = ((df['price_retrace_ratio'] > 0.2) & (df['price_retrace_ratio'] <= 0.5)).astype(int)  # 浅回调
         
+        # 计算均线方向一致性
+        df['ma_direction_consistency'] = (
+            (df['sma_5_direction'] == df['sma_10_direction']).astype(int) + 
+            (df['sma_10_direction'] == df['sma_20_direction']).astype(int) + 
+            (df['sma_5_direction'] == df['sma_20_direction']).astype(int)
+        )
+        
+        # RSI与价格方向一致性
+        df['rsi_price_consistency'] = np.where(
+            (df['start_price'].diff() > 0) == (df['rsi_direction'] == 1), 1, 0
+        ).astype(int)
+        
         # 动量背离特征 - RSI与价格走势背离
         df['momentum_divergence'] = 0
         df['price_change'] = df['start_price'].diff()
@@ -1051,10 +1084,13 @@ class M1DataAnalyzerAndTrainer:
 
         # 6. 特征筛选（只保留数值特征用于训练）
         feature_cols = [
-            'hour', 'weekday', 'session_asia', 'session_europe', 'session_us',
-            'start_price', 'price_round', 'amplitude_ratio', 'rolling_amplitude',
+            'hour', 'weekday', 'is_monday', 'is_tuesday', 'is_wednesday', 'is_thursday', 'is_friday', 'is_saturday', 'is_sunday',
+            'session_asia', 'session_europe', 'session_us',
+            'start_price', 'amplitude_is_multiple_of_ten', 'amplitude_ratio', 'rolling_amplitude',
             'consecutive_same_trend', 'trend_duration_ma', 'trend_strength',
             'price_deviation', 'rsi', 'bb_position', 'volatility',
+            'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
+            'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency',
             'euro_breaks_asian_high', 'euro_breaks_asian_low', 
             'us_breaks_asian_high', 'us_breaks_asian_low',
             'new_high', 'new_low', 'breaks_resistance', 'breaks_support', 

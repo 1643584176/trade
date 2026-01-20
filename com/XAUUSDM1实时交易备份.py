@@ -179,6 +179,15 @@ class XAUUSDM1RealTimeTrader:
         hour = current_time.hour
         weekday = current_time.weekday()
         
+        # 一周七天标识特征
+        is_monday = 1 if weekday == 0 else 0
+        is_tuesday = 1 if weekday == 1 else 0
+        is_wednesday = 1 if weekday == 2 else 0
+        is_thursday = 1 if weekday == 3 else 0
+        is_friday = 1 if weekday == 4 else 0
+        is_saturday = 1 if weekday == 5 else 0
+        is_sunday = 1 if weekday == 6 else 0
+        
         # 交易时段特征
         session_asia = 1 if 0 <= hour <= 8 else 0
         session_europe = 1 if 9 <= hour <= 17 else 0
@@ -277,6 +286,19 @@ class XAUUSDM1RealTimeTrader:
         us_breaks_asian_high = 0
         us_breaks_asian_low = 0
         
+        # 计算均线方向一致性
+        ma_direction_consistency = (
+            (sma_5_direction == sma_10_direction) + 
+            (sma_10_direction == sma_20_direction) + 
+            (sma_5_direction == sma_20_direction)
+        )
+        
+        # 计算RSI与价格方向一致性
+        # 获取前一个价格和RSI值
+        prev_price = close_prices.iloc[-2] if len(close_prices) >= 2 else current_data['close']
+        
+        rsi_price_consistency = 1 if (current_data['close'] > prev_price) == (current_rsi > 50) else 0
+        
         # 新高新低特征
         new_high = 1 if current_data['close'] == close_prices.tail(20).max() else 0 if len(close_prices) >= 20 else 0
         new_low = 1 if current_data['close'] == close_prices.tail(20).min() else 0 if len(close_prices) >= 20 else 0
@@ -285,11 +307,24 @@ class XAUUSDM1RealTimeTrader:
         features = pd.DataFrame([{
             'hour': hour,
             'weekday': weekday,
+            'is_monday': is_monday,
+            'is_tuesday': is_tuesday,
+            'is_wednesday': is_wednesday,
+            'is_thursday': is_thursday,
+            'is_friday': is_friday,
+            'is_saturday': is_saturday,
+            'is_sunday': is_sunday,
             'session_asia': session_asia,
             'session_europe': session_europe,
             'session_us': session_us,
             'start_price': current_data['close'],
-            'price_round': price_round,
+            'amplitude_is_multiple_of_ten': amplitude_is_multiple_of_ten,
+            'sma_5_direction': sma_5_direction,
+            'sma_10_direction': sma_10_direction,
+            'sma_20_direction': sma_20_direction,
+            'rsi_direction': rsi_direction,
+            'ma_direction_consistency': ma_direction_consistency,
+            'rsi_price_consistency': rsi_price_consistency,
             'amplitude_ratio': volatility,  # 使用波动率作为振幅比率
             'rolling_amplitude': recent_changes,  # 使用近期价格变化均值作为滚动振幅
             'consecutive_same_trend': consecutive_same_trend,
