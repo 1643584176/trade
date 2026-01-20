@@ -1376,6 +1376,10 @@ class M1DataAnalyzerAndTrainer:
         # 2. 风控过滤（不符合条件的信号直接丢弃）
         duration_pred = np.clip(duration_pred, MIN_TREND_DURATION, MAX_TREND_DURATION)  # 限制时长
         stop_loss_amplitude = amplitude_pred * STOP_LOSS_RATIO  # 止损幅度
+        
+        # 设置最低止损幅度为5美元，避免止损过小被市场波动触发
+        stop_loss_amplitude = max(stop_loss_amplitude, 5.0)
+        
         risk_reward = amplitude_pred / stop_loss_amplitude  # 风险收益比
 
         # 3. 计算具体交易时间 - 使用最新的M1时间
@@ -1462,7 +1466,7 @@ class M1DataAnalyzerAndTrainer:
 
         # 打印单条信号（实战中可输出多条）
         print(
-            f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12} {round(duration_pred, 0):<10} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {round(risk_reward, 2):<12} {valid_str:<10} {session:<10}")
+            f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}")
 
 
         # 获取最后一条数据的特征值，分析关键突破特征
