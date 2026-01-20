@@ -788,6 +788,9 @@ class XAUUSDM1RealTimeTrader:
             'rsi_direction': rsi_direction,
             'ma_direction_consistency': ma_direction_consistency,
             'rsi_price_consistency': rsi_price_consistency,
+            'local_top': local_top,
+            'local_bottom': local_bottom,
+            'price_velocity': price_velocity,
             'amplitude_ratio': volatility,  # 使用波动率作为振幅比率
             'rolling_amplitude': recent_changes,  # 使用近期价格变化均值作为滚动振幅
             'consecutive_same_trend': consecutive_same_trend,
@@ -928,15 +931,22 @@ class XAUUSDM1RealTimeTrader:
             self.last_signal_time = signal_time
             self.current_signal = latest_signal
             
+            # 获取反转概率信息
+            reversal_probability = latest_signal.get('趋势反转概率(%)', 0)
+                    
             # 检查信号是否有效
-            if latest_signal.get('信号有效性', '') == '✅ 有效':
+            signal_valid = latest_signal.get('信号有效性', '') == '✅ 有效'
+                    
+            # 信号已根据反转概率调整方向
+            if signal_valid:
                 print(f"✅ 从m1_data_analyzer_and_trainer.py获取到新的有效交易信号:")
-                print(f"   交易方向: {latest_signal.get('交易方向', '')}")
+                print(f"   原方向: {latest_signal.get('原方向', '')}, 实际方向: {latest_signal.get('实际方向', '')}")
                 print(f"   开仓时间: {signal_time_str}")
                 print(f"   持仓时长: {latest_signal.get('持仓时长(分钟)', 0)}分钟")
                 print(f"   止盈幅度: {latest_signal.get('止盈幅度(美元)', 0)}美元")
                 print(f"   止损幅度: {latest_signal.get('止损幅度(美元)', 0)}美元")
                 print(f"   置信度: {latest_signal.get('置信度(%)', 0)}%")
+                print(f"   反转概率: {reversal_probability}%")
                 return latest_signal
             else:
                 raise Exception(f"❌ 从m1_data_analyzer_and_trainer.py获取到的交易信号无效，跳过执行")
@@ -1137,6 +1147,11 @@ class XAUUSDM1RealTimeTrader:
             print("⚠️  由于亏损限制，新交易已被禁用，无法下单")
             return False
         
+        # 检查反转概率（已在模型中处理方向反转，此处只需正常执行信号）
+        reversal_prob = signal.get('趋势反转概率(%)', 0)
+        if reversal_prob >= 70:
+            print(f"🔄 信号已根据反转概率调整方向，反转概率: {reversal_prob}%")
+        
         # 检查是否处于冷却期
         if self.cooling_period_until and datetime.now(UTC_PLUS_2) < self.cooling_period_until:
             print(f"❄️  处于冷却期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}，暂停新订单")
@@ -1152,7 +1167,7 @@ class XAUUSDM1RealTimeTrader:
             print("⚠️  由于亏损限制，新交易已被禁用，无法下单")
             return False
             
-        direction = signal.get('交易方向', '')
+        direction = signal.get('实际方向', '')
         lot_size = self.fixed_lot_size
         take_profit_usd = float(signal.get('止盈幅度(美元)', 0))
         stop_loss_usd = float(signal.get('止损幅度(美元)', 0))
@@ -1314,7 +1329,7 @@ class XAUUSDM1RealTimeTrader:
                 "type_filling": mt5.ORDER_FILLING_IOC,
             }
         else:
-            print("❌ 未知的交易方向")
+            print(f"❌ 未知的交易方向: '{direction}'")
             return False
         
         # 确保止盈止损价格合理

@@ -1030,6 +1030,22 @@ class M1DataAnalyzerAndTrainer:
             (df['start_price'].diff() > 0) == (df['rsi_direction'] == 1), 1, 0
         ).astype(int)
         
+        # 检测局部极值点（拐点）
+        df['local_top'] = 0  # 局部高点
+        df['local_bottom'] = 0  # 局部低点
+        
+        for i in range(1, len(df)-1):
+            # 检测局部高点（当前价格比前后都高）
+            if df['start_price'].iloc[i] > df['start_price'].iloc[i-1] and df['start_price'].iloc[i] > df['start_price'].iloc[i+1]:
+                df['local_top'].iloc[i] = 1
+            # 检测局部低点（当前价格比前后都低）
+            elif df['start_price'].iloc[i] < df['start_price'].iloc[i-1] and df['start_price'].iloc[i] < df['start_price'].iloc[i+1]:
+                df['local_bottom'].iloc[i] = 1
+        
+        # 检测连续上涨/下跌后的减速
+        df['price_velocity'] = df['start_price'].diff().rolling(window=3).mean()  # 价格速度
+        df['velocity_change'] = df['price_velocity'].diff()  # 速度变化
+        
         # 动量背离特征 - RSI与价格走势背离
         df['momentum_divergence'] = 0
         df['price_change'] = df['start_price'].diff()
@@ -1091,6 +1107,7 @@ class M1DataAnalyzerAndTrainer:
             'price_deviation', 'rsi', 'bb_position', 'volatility',
             'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
             'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency',
+            'local_top', 'local_bottom', 'price_velocity', 'velocity_change',
             'euro_breaks_asian_high', 'euro_breaks_asian_low', 
             'us_breaks_asian_high', 'us_breaks_asian_low',
             'new_high', 'new_low', 'breaks_resistance', 'breaks_support', 
@@ -1237,7 +1254,7 @@ class M1DataAnalyzerAndTrainer:
     def generate_trading_signals(self):
         """生成可直接下单的实战交易信号"""
         print(
-            f"{'开仓时间':<15} {'持仓时长':<10} {'方向':<8} {'反转概率':<8} {'止盈幅度':<8} {'止损幅度':<10} {'置信度':<8} {'风险收益比':<12} {'信号有效性':<8} {'交易时段':<8}")
+            f"{'开仓时间':<15} {'原方向':<8} {'实际方向':<10}  {'反转概率':<10} {'止盈幅度':<10} {'止损幅度':<10} {'置信度':<8} {'交易时段':<8}")
 
         # 获取最新的M1数据时间
         latest_m1_time = self.get_latest_m1_time()
@@ -1326,6 +1343,28 @@ class M1DataAnalyzerAndTrainer:
             if (current_trend == 1 and ma_dist > 2) or (current_trend == 0 and ma_dist < -2):  # 远离移动平均线
                 reversal_prob += 15  # 远离均线可能引发回调
                 reversal_prob = min(reversal_prob, 100)
+            
+            # 检查局部拐点特征
+            local_top = raw_last_data.get('local_top', 0)
+            local_bottom = raw_last_data.get('local_bottom', 0)
+            
+            # 如果检测到局部高点且当前为上涨趋势，增加反转概率
+            if local_top == 1 and current_trend == 1:
+                reversal_prob += 25  # 局部高点+上涨趋势 = 强反转信号
+                reversal_prob = min(reversal_prob, 100)
+            # 如果检测到局部低点且当前为下跌趋势，增加反转概率
+            elif local_bottom == 1 and current_trend == 0:
+                reversal_prob += 25  # 局部低点+下跌趋势 = 强反转信号
+                reversal_prob = min(reversal_prob, 100)
+            
+            # 检查速度变化（趋势减速）
+            velocity_change = raw_last_data.get('velocity_change', 0)
+            if current_trend == 1 and velocity_change < 0:  # 上涨中减速
+                reversal_prob += 10
+                reversal_prob = min(reversal_prob, 100)
+            elif current_trend == 0 and velocity_change > 0:  # 下跌中减速
+                reversal_prob += 10
+                reversal_prob = min(reversal_prob, 100)
         else:
             # 如果反转模型不存在，使用默认值
             reversal_prob = 0  # 默认反转概率为0
@@ -1363,13 +1402,30 @@ class M1DataAnalyzerAndTrainer:
                 session = "美盘(隔夜)"
         
 
-        # 4. 信号有效性判断
+        # 4. 信号有效性判断 - 如果反转概率高，则改变交易方向
         signal_valid = False
+        
+        # 保存原始方向
+        original_trend_pred = trend_pred
+        
+        # 如果反转概率高，反转交易方向
+        if reversal_prob >= 70:
+            trend_pred = 1 - trend_pred  # 反转方向：做多变做空，做空变做多
+
+        
         if trend_confidence >= CONFIDENCE_THRESHOLD and risk_reward >= RISK_REWARD_RATIO:
             signal_valid = True
 
         # 5. 格式化输出
-        trend_str = "做多" if trend_pred == 1 else "做空"
+        original_trend_str = "做多" if original_trend_pred == 1 else "做空"
+        actual_trend_str = "做多" if trend_pred == 1 else "做空"
+        
+        # 如果方向被反转，添加特殊标记
+        if reversal_prob >= 70:
+            actual_trend_str_display = f"{actual_trend_str}(已反转)"
+        else:
+            actual_trend_str_display = actual_trend_str
+        
         valid_str = "✅ 有效" if signal_valid else "❌ 无效"
         open_time_str = open_time.strftime("%Y-%m-%d %H:%M") if pd.notna(open_time) else "未知"
 
@@ -1377,8 +1433,9 @@ class M1DataAnalyzerAndTrainer:
         self.trading_signals.append({
             "开仓时间": open_time_str,
             "平仓时间": close_time.strftime("%Y-%m-%d %H:%M") if pd.notna(close_time) else "未知",
+            "原方向": original_trend_str,
+            "实际方向": actual_trend_str,
             "持仓时长(分钟)": round(duration_pred, 0),
-            "交易方向": trend_str,
             "趋势反转概率(%)": round(reversal_prob, 1),
             # 根据用户偏好，不显示入场价格信息
             # "开仓价格": round(last_raw_data['start_price'], 2),
@@ -1392,7 +1449,7 @@ class M1DataAnalyzerAndTrainer:
 
         # 打印单条信号（实战中可输出多条）
         print(
-            f"{open_time_str:<20} {round(duration_pred, 0):<10} {trend_str:<8} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {round(risk_reward, 2):<12} {valid_str:<10} {session:<10}")
+            f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12}  {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10}  {session:<10}")
 
 
         # 获取最后一条数据的特征值，分析关键突破特征
@@ -1515,10 +1572,7 @@ class M1DataAnalyzerAndTrainer:
 
         # 实战下单建议
         if signal_valid:
-            print(f"\n📝 实战下单建议：开仓时间：{open_time_str} | 交易时段：{session} | 交易方向：{trend_str}黄金M1 | 开仓价格：{round(last_raw_data['start_price'], 2)}美元 | 止盈设置：{round(last_raw_data['start_price'] + (amplitude_pred if trend_pred == 1 else -amplitude_pred), 2)}美元 | 止损设置：{round(last_raw_data['start_price'] - (stop_loss_amplitude if trend_pred == 1 else -stop_loss_amplitude), 2)}美元 | 平仓时间：{close_time.strftime('%Y-%m-%d %H:%M')}（或达到止盈/止损立即平仓）")
-            
-            if reversal_pred == 1 and reversal_prob > 70:
-                print(f"⚠️ 特别提醒：反转概率{reversal_prob}%，注意市场变化！")
+            print(f"\n📝 实战下单建议：开仓时间：{open_time_str} | 交易时段：{session} | 交易方向：{actual_trend_str_display}黄金M1 | 开仓价格：{round(last_raw_data['start_price'], 2)}美元 | 止盈设置：{round(last_raw_data['start_price'] + (amplitude_pred if trend_pred == 1 else -amplitude_pred), 2)}美元 | 止损设置：{round(last_raw_data['start_price'] - (stop_loss_amplitude if trend_pred == 1 else -stop_loss_amplitude), 2)}美元")
 
         # 返回最新生成的信号
         return self.trading_signals[-1] if self.trading_signals else None
