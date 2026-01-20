@@ -2,6 +2,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 from datetime import datetime, timedelta
 import pytz
+import os
 
 
 def 查询最新m1时间():
@@ -41,9 +42,11 @@ def 查询最新m1时间():
     return dt
 
 
-def 获取最近60天m1数据():
+def 获取最近60天m1数据(save_csv=False, output_dir="m1_trend_analysis_results"):
     """
     获取XAUUSD最近60天的M1（1分钟）历史数据，并转换为UTC+2时区
+    :param save_csv: 是否保存为CSV文件，默认False
+    :param output_dir: CSV输出目录，默认为m1_trend_analysis_results
     :return: 带UTC+2时间索引的DataFrame，None表示失败
     """
     # 初始化MT5连接
@@ -89,23 +92,96 @@ def 获取最近60天m1数据():
     df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
     # 2. 转换为UTC+2时区
     df["timestamp"] = df["timestamp"].dt.tz_convert(None)
-    # 3. 设置UTC+2时间为索引，保留核心字段
-    df = df.set_index("timestamp")
-    df = df[["open", "high", "low", "close", "tick_volume"]]
+    # 保持UTC+2时区的时间，但不带时区信息
+    df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=2)
 
+    # 3. 保留核心字段
+    df = df[["timestamp", "open", "high", "low", "close", "tick_volume", "spread"]]
+
+    # 添加星期信息
+    df['weekday'] = df['timestamp'].dt.weekday
+    # 将英文星期名称转换为中文
+    weekday_map = {
+        'Monday': '星期一',
+        'Tuesday': '星期二', 
+        'Wednesday': '星期三',
+        'Thursday': '星期四',
+        'Friday': '星期五',
+        'Saturday': '星期六',
+        'Sunday': '星期日'
+    }
+    df['week_day_name'] = df['timestamp'].dt.day_name().map(weekday_map)
+    
+    # 添加价格变化指标
+    df['price_change'] = df['close'] - df['open']
+    df['price_change_pct'] = ((df['close'] - df['open']) / df['open']) * 100
+    df['range_size'] = abs(df['close'] - df['open'])
+    df['upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
+    df['lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
+    
+    # 添加移动平均线 (用于趋势判断)
+    df['ema_fast'] = df['close'].ewm(span=5).mean()  # 5周期快速EMA
+    df['ema_slow'] = df['close'].ewm(span=20).mean()  # 20周期慢速EMA
+    
+    # 添加波动率指标
+    df['volatility'] = df['close'].rolling(window=20).std()
+    
+    # 添加相对强弱指标 (RSI)
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    # 根据项目规范过滤周末数据，仅保留周一至周五
+    df = df[df['weekday'] < 5]  # 0-4 代表周一到周五
+    
+    # 将数值列四舍五入到合适的小数位数
+    numeric_columns = ['open', 'high', 'low', 'close', 'price_change', 'price_change_pct', 'range_size', 
+                     'upper_shadow', 'lower_shadow', 'ema_fast', 'ema_slow', 'volatility', 'rsi']
+    for col in numeric_columns:
+        if col in df.columns:
+            if col in ['rsi']:
+                df[col] = df[col].round(2)  # RSI保留2位小数
+            elif col in ['price_change_pct']:
+                df[col] = df[col].round(4)  # 百分比保留4位小数
+            else:
+                df[col] = df[col].round(2)  # 其他价格相关数据保留2位小数
+    
+    # 交易量通常是整数
+    if 'tick_volume' in df.columns:
+        df['tick_volume'] = df['tick_volume'].astype(int)
+    
+    # 根据参数决定是否保存为CSV
+    if save_csv:
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 生成带时间戳的文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{output_dir}/m1_raw_data_{timestamp}.csv"
+        
+        try:
+            # 保存数据到CSV（包含星期和交易时段信息）
+            df.to_csv(filename, index=False, encoding='utf-8-sig')
+            print(f"✅ M1原始数据已保存到: {filename}")
+        except Exception as e:
+            print(f"❌ 保存CSV失败: {str(e)}")
+    
     return df
 
 
 # 测试函数
 if __name__ == "__main__":
-    latest_time = 查询最新m1时间()
-    if latest_time is not None:
-        print(f"最新M1 K线时间（UTC）：{latest_time}")
+    # latest_time = 查询最新m1时间()
+    # if latest_time is not None:
+    #     print(f"最新M1 K线时间（UTC）：{latest_time}")
 
     # 测试获取最近60天的数据
     print(f"\n" + "=" * 50)
     print("测试获取最近60天数据：")
-    data_60d = 获取最近60天m1数据()
+    data_60d = 获取最近60天m1数据(save_csv=False)  # 测试保存功能
     if data_60d is not None:
+        print(f"数据形状：{data_60d.shape}")
         print("后5行数据：")
         print(data_60d.tail())
