@@ -1402,16 +1402,28 @@ class M1DataAnalyzerAndTrainer:
                 session = "美盘(隔夜)"
         
 
-        # 4. 信号有效性判断 - 如果反转概率高，则改变交易方向
+        # 4. 信号有效性判断 - 只有检测到拐点才反转方向
         signal_valid = False
         
         # 保存原始方向
         original_trend_pred = trend_pred
         
-        # 如果反转概率高，反转交易方向
-        if reversal_prob >= 70:
-            trend_pred = 1 - trend_pred  # 反转方向：做多变做空，做空变做多
-
+        # 检查是否检测到拐点（局部高点或低点）
+        current_data_point = raw_last_data  # 使用raw_last_data变量
+        local_top_detected = current_data_point.get('local_top', 0) if current_data_point is not None else 0
+        local_bottom_detected = current_data_point.get('local_bottom', 0) if current_data_point is not None else 0
+        
+        # 只有在检测到拐点且反转概率高时才反转方向
+        if reversal_prob >= 70 and (local_top_detected == 1 or local_bottom_detected == 1):
+            # 如果当前是上涨趋势且检测到局部高点，或当前是下跌趋势且检测到局部低点，则反转方向
+            current_trend = original_trend_pred
+            if (current_trend == 1 and local_top_detected == 1) or (current_trend == 0 and local_bottom_detected == 1):
+                trend_pred = 1 - trend_pred  # 反转方向：做多变做空，做空变做多
+                print(f"   🔄 检测到拐点且反转概率 {reversal_prob}%，已反转交易方向")
+            else:
+                print(f"   📊 检测到反转概率 {reversal_prob}%，但未检测到对应拐点，保持原方向")
+        elif reversal_prob >= 70:
+            print(f"   📊 检测到反转概率 {reversal_prob}%，但未检测到拐点，保持原方向")
         
         if trend_confidence >= CONFIDENCE_THRESHOLD and risk_reward >= RISK_REWARD_RATIO:
             signal_valid = True
@@ -1421,7 +1433,8 @@ class M1DataAnalyzerAndTrainer:
         actual_trend_str = "做多" if trend_pred == 1 else "做空"
         
         # 如果方向被反转，添加特殊标记
-        if reversal_prob >= 70:
+        # 只有在实际发生了方向反转时才标记
+        if original_trend_pred != trend_pred:
             actual_trend_str_display = f"{actual_trend_str}(已反转)"
         else:
             actual_trend_str_display = actual_trend_str
@@ -1449,7 +1462,7 @@ class M1DataAnalyzerAndTrainer:
 
         # 打印单条信号（实战中可输出多条）
         print(
-            f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12}  {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10}  {session:<10}")
+            f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12} {round(duration_pred, 0):<10} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {round(risk_reward, 2):<12} {valid_str:<10} {session:<10}")
 
 
         # 获取最后一条数据的特征值，分析关键突破特征
