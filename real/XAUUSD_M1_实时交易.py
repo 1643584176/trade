@@ -1146,12 +1146,7 @@ class XAUUSDM1RealTimeTrader:
         if self.trading_disabled:
             print("⚠️  由于亏损限制，新交易已被禁用，无法下单")
             return False
-        
-        # 检查反转概率（已在模型中处理方向反转，此处只需正常执行信号）
-        reversal_prob = signal.get('趋势反转概率(%)', 0)
-        if reversal_prob >= 70:
-            print(f"🔄 信号已根据反转概率调整方向，反转概率: {reversal_prob}%")
-        
+
         # 检查是否处于冷却期
         if self.cooling_period_until and datetime.now(UTC_PLUS_2) < self.cooling_period_until:
             print(f"❄️  处于冷却期，直到 {self.cooling_period_until.strftime('%Y-%m-%d %H:%M:%S')}，暂停新订单")
@@ -1718,21 +1713,13 @@ class XAUUSDM1RealTimeTrader:
             pnl_percentage = 0
 
         print(f"当前账户余额: ${current_balance:.2f} | 程序启动时余额: ${daily_start_balance:.2f}|  今日盈亏: {daily_pnl:+.2f}$ ({pnl_percentage:+.2f}%)")
-        # 显示当前交易状态
-        if self.trading_disabled:
-            print("   🚨 交易状态: 已禁用（因亏损限制）")
-        elif self.cooling_period_until and datetime.now(UTC_PLUS_2) < self.cooling_period_until:
-            print(f"   ❄️  交易状态: 冷却期中（至 {self.cooling_period_until.strftime('%H:%M:%S')}）")
-        else:
-            print(f"   💹 交易状态: 正常运行（亏损限制: {self.daily_loss_limit_percentage}%）")
-        
+
         if self.active_positions:
-            print("   持仓详情:")
             for i, pos in enumerate(self.active_positions):
                 # 检查MT5连接状态，如果未连接则初始化
                 if mt5.account_info() is None:
                     if not mt5.initialize():
-                        print(f"     #{i+1} {pos['direction']} 无法获取价格信息")
+                        print(f"  持仓详情: #{i+1} {pos['direction']} 无法获取价格信息")
                         continue
                 
                 current_ask, current_bid = self.get_current_price()
@@ -1767,18 +1754,12 @@ class XAUUSDM1RealTimeTrader:
                     
                     # 检查置信度字段是否存在
                     confidence = pos.get('confidence', 0)
-                    print(f"     #{i+1} {pos['direction']} {unrealized_pnl:+.2f}$ 方向:{pos['direction']}{remaining_time} 置信度:{confidence}%")
+                    print(f"  #{i+1} {pos['direction']} {unrealized_pnl:+.2f}$ 方向:{pos['direction']}{remaining_time}")
                 else:
-                    print(f"     #{i+1} {pos['direction']} 暂无法计算盈亏")
+                    print(f"  #{i+1} {pos['direction']} 暂无法计算盈亏")
         else:
             print("   持仓详情: 无")
-        
-        print(f"   交易历史: {len(self.trade_history)}笔")
-        if self.trade_history:
-            recent_trades = self.trade_history[-3:]  # 显示最近3笔交易
-            for trade in recent_trades:
-                print(f"     {trade['close_time'].strftime('%H:%M:%S')} {trade['direction']} {trade['profit']:+.2f}$ ({trade['reason']})")
-    
+
     def run_trading_cycle(self):
         """运行交易循环"""
         while not self.stop_event.is_set():

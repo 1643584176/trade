@@ -1423,12 +1423,7 @@ class M1DataAnalyzerAndTrainer:
             current_trend = original_trend_pred
             if (current_trend == 1 and local_top_detected == 1) or (current_trend == 0 and local_bottom_detected == 1):
                 trend_pred = 1 - trend_pred  # 反转方向：做多变做空，做空变做多
-                print(f"   🔄 检测到拐点且反转概率 {reversal_prob}%，已反转交易方向")
-            else:
-                print(f"   📊 检测到反转概率 {reversal_prob}%，但未检测到对应拐点，保持原方向")
-        elif reversal_prob >= 70:
-            print(f"   📊 检测到反转概率 {reversal_prob}%，但未检测到拐点，保持原方向")
-        
+
         if trend_confidence >= CONFIDENCE_THRESHOLD and risk_reward >= RISK_REWARD_RATIO:
             signal_valid = True
 
