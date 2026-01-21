@@ -124,7 +124,6 @@ class M1DataAnalyzerAndTrainer:
 
         # 检查交易品种
         symbol = "XAUUSD"
-        symbol_info = mt5.symbol_info(symbol)
 
         # 计算时间范围
         end_date = datetime.now()
