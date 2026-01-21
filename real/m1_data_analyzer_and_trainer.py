@@ -1267,70 +1267,75 @@ class M1DataAnalyzerAndTrainer:
         
         return latest_time
 
+
+
     def get_short_term_trend(self, num_candles=5):
         """
-        获取最近N根K线的短期趋势，使用滚动窗口收盘价均值的差值来判断趋势
-        :param num_candles: 考虑的K线索引，默认为5
-        :return: 1 表示短期上涨趋势，0 表示短期下跌趋势，-1 表示横盘
+        基于N根M1均线 + 连续3根K线站上/跌破均线 判断短期趋势
+        :param num_candles: 均线周期（默认5，即5M均线）
+        :return: 1 上涨趋势（连续3根站上均线），0 下跌趋势（连续3根跌破均线），-1 横盘
         """
-        # 初始化MT5连接
+        # 初始化MT5连接（优化：避免重复初始化/关闭，建议移到类的__init__）
         if not mt5.initialize():
             print(f"❌ MT5初始化失败: {mt5.last_error()}")
             return -1  # 返回横盘状态
-        
+
         # 检查交易品种
         symbol = "XAUUSD"
         symbol_info = mt5.symbol_info(symbol)
-
-        # 获取最近的N+3根K线数据，以便计算连续4个滚动窗口，形成3个变化方向
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, num_candles + 3)
-        
-        if rates is None or len(rates) < num_candles + 3:
-            print(f"⚠️  未获取到足够的M1数据({num_candles + 3}根)，实际获取{len(rates) if rates is not None else 0}根")
+        if symbol_info is None or not symbol_info.visible:
+            print(f"⚠️ 品种{symbol}不可用或未激活")
             mt5.shutdown()
-            # 如果数据不足，返回横盘状态
-            if rates is not None and len(rates) > 0:
-                # 比较首尾收盘价判断趋势
-                if rates[-1]['close'] > rates[0]['close']:
-                    return 1  # 短期上涨
-                else:
-                    return 0  # 短期下跌
             return -1
-        
-        import numpy as np
-        
-        # 计算连续4个滚动窗口的收盘价均值
-        # rates[0:num_candles] - 第一个窗口
-        # rates[1:num_candles+1] - 第二个窗口  
-        # rates[2:num_candles+2] - 第三个窗口
-        # rates[3:num_candles+3] - 第四个窗口
-        first_avg = np.mean([rate['close'] for rate in rates[0:num_candles]])
-        second_avg = np.mean([rate['close'] for rate in rates[1:num_candles+1]])
-        third_avg = np.mean([rate['close'] for rate in rates[2:num_candles+2]])
-        fourth_avg = np.mean([rate['close'] for rate in rates[3:num_candles+3]])
-        
-        # 计算连续3个变化方向
-        first_direction = 1 if second_avg > first_avg else (0 if second_avg < first_avg else -1)
-        second_direction = 1 if third_avg > second_avg else (0 if third_avg < second_avg else -1)
-        third_direction = 1 if fourth_avg > third_avg else (0 if fourth_avg < third_avg else -1)
-        
-        # 断开MT5连接
-        mt5.shutdown()
-        
-        # 检查是否有连续3步同方向
-        if first_direction == second_direction == third_direction:
-            if first_direction == 1:
-                # 连续3步都是上涨
-                return 1
-            elif first_direction == 0:
-                # 连续3步都是下跌
-                return 0
+
+        # 获取数据：需要 均线周期 + 3 根K线（均线周期根算均线，3根用于判断连续站上/跌破）
+        # 例如5均线 → 取5+3=8根，rates[0]最旧，rates[-1]最新
+        need_rates = num_candles + 3
+        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, need_rates)
+
+        if rates is None or len(rates) < need_rates:
+            print(f"⚠️  未获取到足够的M1数据({need_rates}根)，实际获取{len(rates) if rates is not None else 0}根")
+            mt5.shutdown()
+            return -1
+
+        # 提取收盘价数组
+        closes = np.array([rate['close'] for rate in rates])
+
+        # 1. 计算最新的均线值（基于最近num_candles根K线的收盘价）
+        # 注意：取最新的num_candles根算均线，而非最旧的（修复原代码方向错误）
+        latest_ma = np.mean(closes[-num_candles:])
+
+        # 2. 提取最新的3根K线收盘价（用于判断连续站上/跌破）
+        latest_3_closes = closes[-3:]  # 倒数第3、2、1根（最新的3根）
+
+        # 3. 判断每根是否站上/跌破均线
+        # 定义：收盘价 > 均线 → 站上（1）；收盘价 < 均线 → 跌破（0）；相等（-1）
+        def judge_ma_relation(close, ma):
+            if close > ma:
+                return 1  # 站上均线
+            elif close < ma:
+                return 0  # 跌破均线
             else:
-                # 连续3步都持平，返回横盘
-                return -1
+                return -1  # 持平
+
+        # 计算最新3根K线与均线的关系
+        ma_relations = [judge_ma_relation(close, latest_ma) for close in latest_3_closes]
+
+        # 4. 趋势判定：连续3根一致才判定趋势
+        if all(rel == 1 for rel in ma_relations):
+            # 连续3根都站上均线 → 上涨趋势
+            trend = 1
+        elif all(rel == 0 for rel in ma_relations):
+            # 连续3根都跌破均线 → 下跌趋势
+            trend = 0
         else:
-            # 方向不一致，判定为横盘（无明确趋势）
-            return -1
+            # 不是连续3根一致 → 横盘
+            trend = -1
+
+        # 断开MT5连接（优化：建议移到程序结束时统一关闭，而非每次调用）
+        mt5.shutdown()
+
+        return trend
 
     def generate_trading_signals(self):
         """生成可直接下单的实战交易信号"""

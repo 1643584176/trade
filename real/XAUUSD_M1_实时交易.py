@@ -673,14 +673,6 @@ class XAUUSDM1RealTimeTrader:
                     
             # 信号已根据反转概率调整方向
             if signal_valid:
-                print(f"✅ 从m1_data_analyzer_and_trainer.py获取到新的有效交易信号:")
-                print(f"   原方向: {latest_signal.get('原方向', '')}, 实际方向: {latest_signal.get('实际方向', '')}")
-                print(f"   开仓时间: {signal_time_str}")
-                print(f"   持仓时长: {latest_signal.get('持仓时长(分钟)', 0)}分钟")
-                print(f"   止盈幅度: {latest_signal.get('止盈幅度(美元)', 0)}美元")
-                print(f"   止损幅度: {latest_signal.get('止损幅度(美元)', 0)}美元")
-                print(f"   置信度: {latest_signal.get('置信度(%)', 0)}%")
-                print(f"   反转概率: {reversal_probability}%")
                 return latest_signal
             else:
                 raise Exception(f"❌ 从m1_data_analyzer_and_trainer.py获取到的交易信号无效，跳过执行")
