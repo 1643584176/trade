@@ -12,8 +12,6 @@ import math
 import os
 import shutil
 import joblib
-import logging
-from pathlib import Path
 
 # 机器学习相关库
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -34,28 +32,12 @@ MIN_TREND_DURATION = 5  # 最小持仓时长（分钟），避免太短的无效
 MAX_TREND_DURATION = 120  # 最大持仓时长（分钟），避免持仓过久
 RISK_REWARD_RATIO = 2  # 风险收益比≥2（止盈/止损≥2，符合交易风控）
 
-# 配置日志
-log_dir = Path("trading_logs")
-log_dir.mkdir(exist_ok=True)
-
-# 配置日志记录器
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_dir / f"trading_signals_{datetime.now().strftime('%Y%m%d')}.log", encoding='utf-8'),
-        logging.StreamHandler()  # 同时输出到控制台
-    ]
-)
-logger = logging.getLogger(__name__)
-
 
 class M1DataAnalyzerAndTrainer:
     """M1数据趋势分析与AI模型训练一体化类"""
-    
+
     def __init__(self):
 
-        
         # 创建输出目录
         self.output_dir = "m1_trend_analysis_results"
         if not os.path.exists(self.output_dir):
@@ -63,7 +45,7 @@ class M1DataAnalyzerAndTrainer:
         else:
             # 清理输出目录中的旧文件
             self._cleanup_old_files()
-        
+
         # 核心数据：保留完整的时间、时长、价格数据
         self.raw_data = None
         self.features = None
@@ -81,11 +63,11 @@ class M1DataAnalyzerAndTrainer:
 
         # 交易信号存储
         self.trading_signals = []
-        
+
         # 模型保存目录
         self.model_dir = "trading_ai_models"
         os.makedirs(self.model_dir, exist_ok=True)
-        
+
         # 在初始化时也清理旧的模型文件
         self._cleanup_old_model_files()
 
@@ -101,7 +83,7 @@ class M1DataAnalyzerAndTrainer:
                     shutil.rmtree(file_path)
             except Exception as e:
                 print(f"⚠️  删除文件 {file_path} 时出错: {e}")
-    
+
     def _cleanup_old_model_files(self):
         """清理模型目录中的旧pkl文件"""
         if os.path.exists(self.model_dir):
@@ -160,7 +142,6 @@ class M1DataAnalyzerAndTrainer:
         # 选择需要的列
         df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'spread']]
 
-
         print(f"📊 实际时间范围: {df['timestamp'].iloc[0]} 到 {df['timestamp'].iloc[-1]}")
 
         # 检查数据的连续性
@@ -205,7 +186,7 @@ class M1DataAnalyzerAndTrainer:
             return None
 
         deltas = np.diff(prices)
-        seed = deltas[:window+1]
+        seed = deltas[:window + 1]
         up = seed[seed >= 0].sum() / window
         down = -seed[seed < 0].sum() / window
         rs = up / down if down != 0 else 0
@@ -216,7 +197,7 @@ class M1DataAnalyzerAndTrainer:
         rsi_values[window] = rsi  # 在window位置设置初始值
 
         for i in range(window + 1, len(prices)):
-            delta = deltas[i-1]  # 当前变化
+            delta = deltas[i - 1]  # 当前变化
             if delta > 0:
                 upval = delta
                 downval = 0.
@@ -245,7 +226,7 @@ class M1DataAnalyzerAndTrainer:
 
         # 获取用于计算指标的数据段（包含足够的历史数据）
         if end_idx + 1 <= len(data):
-            indicator_data = data.iloc[actual_start_idx:end_idx+1]
+            indicator_data = data.iloc[actual_start_idx:end_idx + 1]
         else:
             # 如果索引超出范围，则使用最大可能的数据
             indicator_data = data.iloc[actual_start_idx:]
@@ -265,10 +246,10 @@ class M1DataAnalyzerAndTrainer:
         # 计算布林带 - 需要更多数据点
         bb_window = 20
         bb_start_idx = max(0, start_idx - bb_window)  # 布林带需要更多历史数据
-        bb_end_idx = min(len(data)-1, end_idx)
+        bb_end_idx = min(len(data) - 1, end_idx)
 
         if bb_end_idx - bb_start_idx + 1 >= bb_window:
-            bb_data = data.iloc[bb_start_idx:bb_end_idx+1]
+            bb_data = data.iloc[bb_start_idx:bb_end_idx + 1]
             close_series = bb_data['close']
             upper_band, middle_band, lower_band = self.calculate_bollinger_bands(close_series, window=bb_window)
 
@@ -276,12 +257,18 @@ class M1DataAnalyzerAndTrainer:
             start_bb_pos = start_idx - bb_start_idx
             end_bb_pos = end_idx - bb_start_idx
 
-            start_upper = upper_band.iloc[start_bb_pos] if start_bb_pos < len(upper_band) and not pd.isna(upper_band.iloc[start_bb_pos]) else None
-            start_middle = middle_band.iloc[start_bb_pos] if start_bb_pos < len(middle_band) and not pd.isna(middle_band.iloc[start_bb_pos]) else None
-            start_lower = lower_band.iloc[start_bb_pos] if start_bb_pos < len(lower_band) and not pd.isna(lower_band.iloc[start_bb_pos]) else None
-            end_upper = upper_band.iloc[end_bb_pos] if end_bb_pos < len(upper_band) and not pd.isna(upper_band.iloc[end_bb_pos]) else None
-            end_middle = middle_band.iloc[end_bb_pos] if end_bb_pos < len(middle_band) and not pd.isna(middle_band.iloc[end_bb_pos]) else None
-            end_lower = lower_band.iloc[end_bb_pos] if end_bb_pos < len(lower_band) and not pd.isna(lower_band.iloc[end_bb_pos]) else None
+            start_upper = upper_band.iloc[start_bb_pos] if start_bb_pos < len(upper_band) and not pd.isna(
+                upper_band.iloc[start_bb_pos]) else None
+            start_middle = middle_band.iloc[start_bb_pos] if start_bb_pos < len(middle_band) and not pd.isna(
+                middle_band.iloc[start_bb_pos]) else None
+            start_lower = lower_band.iloc[start_bb_pos] if start_bb_pos < len(lower_band) and not pd.isna(
+                lower_band.iloc[start_bb_pos]) else None
+            end_upper = upper_band.iloc[end_bb_pos] if end_bb_pos < len(upper_band) and not pd.isna(
+                upper_band.iloc[end_bb_pos]) else None
+            end_middle = middle_band.iloc[end_bb_pos] if end_bb_pos < len(middle_band) and not pd.isna(
+                middle_band.iloc[end_bb_pos]) else None
+            end_lower = lower_band.iloc[end_bb_pos] if end_bb_pos < len(lower_band) and not pd.isna(
+                lower_band.iloc[end_bb_pos]) else None
         else:
             start_upper = start_middle = start_lower = end_upper = end_middle = end_lower = None
 
@@ -294,9 +281,9 @@ class M1DataAnalyzerAndTrainer:
 
         # 检查索引是否有效
         if (0 <= start_pos_in_series < len(rsi_values) and
-            0 <= end_pos_in_series < len(rsi_values) and
-            not pd.isna(rsi_values.iloc[start_pos_in_series]) and
-            not pd.isna(rsi_values.iloc[end_pos_in_series])):
+                0 <= end_pos_in_series < len(rsi_values) and
+                not pd.isna(rsi_values.iloc[start_pos_in_series]) and
+                not pd.isna(rsi_values.iloc[end_pos_in_series])):
 
             start_rsi = float(rsi_values.iloc[start_pos_in_series])
             end_rsi = float(rsi_values.iloc[end_pos_in_series])
@@ -484,7 +471,7 @@ class M1DataAnalyzerAndTrainer:
                 # 如果找到多个连续同向趋势
                 if j > i + 1:
                     first_trend = current_trend
-                    last_trend = trends[j-1]
+                    last_trend = trends[j - 1]
                     total_change = last_trend['end_price'] - first_trend['start_price']
 
                     # 只显示变化超过5美元的交易机会
@@ -499,7 +486,8 @@ class M1DataAnalyzerAndTrainer:
                             'start_idx': first_trend['start_idx'],
                             'end_idx': last_trend['end_idx'],
                             'total_change_points': total_change * 100,
-                            'duration_minutes': (last_trend['end_time'] - first_trend['start_time']).total_seconds() / 60
+                            'duration_minutes': (last_trend['end_time'] - first_trend[
+                                'start_time']).total_seconds() / 60
                         }
                         significant_opportunities.append(opportunity)
                         self.significant_opportunities.append(opportunity)
@@ -507,7 +495,7 @@ class M1DataAnalyzerAndTrainer:
                         # print(f"   连续{opportunity['type']}机会: {opportunity['start_time'].strftime('%m-%d %H:%M:%S')} -> {opportunity['end_time'].strftime('%m-%d %H:%M:%S')}", end="")
 
                         # 获取该趋势期间的开盘价（从趋势开始时的数据点获取）
-                        trend_data = data.iloc[opportunity['start_idx']:opportunity['end_idx']+1]
+                        trend_data = data.iloc[opportunity['start_idx']:opportunity['end_idx'] + 1]
                         period_open = trend_data.iloc[0]['open']
                         # print(f" | 开盘价: {period_open:.2f} |", end="")
                         #
@@ -540,7 +528,8 @@ class M1DataAnalyzerAndTrainer:
                         end_idx = opportunity['end_idx']
 
                         # 计算开始和结束位置的技术指标
-                        indicator_result = self.calculate_indicators_with_history(data, start_idx, end_idx, lookback_period=14)
+                        indicator_result = self.calculate_indicators_with_history(data, start_idx, end_idx,
+                                                                                  lookback_period=14)
                         if indicator_result is not None and len(indicator_result) == 8:
                             start_rsi, end_rsi, start_bb_upper, start_bb_middle, start_bb_lower, end_bb_upper, end_bb_middle, end_bb_lower = indicator_result
                         else:
@@ -548,7 +537,7 @@ class M1DataAnalyzerAndTrainer:
                             start_rsi, end_rsi, start_bb_upper, start_bb_middle, start_bb_lower, end_bb_upper, end_bb_middle, end_bb_lower = [None] * 8
 
                         # 计算趋势期间的最高价和最低价
-                        trend_data = data.iloc[start_idx:end_idx+1]
+                        trend_data = data.iloc[start_idx:end_idx + 1]
 
                         # 起始位置的最高价和最低价
                         start_high = trend_data.iloc[0]['high']
@@ -620,7 +609,7 @@ class M1DataAnalyzerAndTrainer:
                         # print(f"   连续{opportunity['type']}机会: {opportunity['start_time'].strftime('%m-%d %H:%M:%S')} -> {opportunity['end_time'].strftime('%m-%d %H:%M:%S')}", end="")
 
                         # 获取该趋势期间的开盘价（从趋势开始时的数据点获取）
-                        trend_data = data.iloc[opportunity['start_idx']:opportunity['end_idx']+1]
+                        trend_data = data.iloc[opportunity['start_idx']:opportunity['end_idx'] + 1]
                         period_open = trend_data.iloc[0]['open']
                         # print(f" | 开盘价: {period_open:.2f} |", end="")
                         #
@@ -652,7 +641,8 @@ class M1DataAnalyzerAndTrainer:
                         end_idx = opportunity['end_idx']
 
                         # 计算开始和结束位置的技术指标
-                        indicator_result = self.calculate_indicators_with_history(data, start_idx, end_idx, lookback_period=14)
+                        indicator_result = self.calculate_indicators_with_history(data, start_idx, end_idx,
+                                                                                  lookback_period=14)
                         if indicator_result is not None and len(indicator_result) == 8:
                             start_rsi, end_rsi, start_bb_upper, start_bb_middle, start_bb_lower, end_bb_upper, end_bb_middle, end_bb_lower = indicator_result
                         else:
@@ -660,7 +650,7 @@ class M1DataAnalyzerAndTrainer:
                             start_rsi, end_rsi, start_bb_upper, start_bb_middle, start_bb_lower, end_bb_upper, end_bb_middle, end_bb_lower = [None] * 8
 
                         # 计算趋势期间的最高价和最低价
-                        trend_data = data.iloc[start_idx:end_idx+1]
+                        trend_data = data.iloc[start_idx:end_idx + 1]
 
                         # 起始位置的最高价和最低价
                         start_high = trend_data.iloc[0]['high']
@@ -792,12 +782,11 @@ class M1DataAnalyzerAndTrainer:
             # 整体变化摘要保留在内存中
             # overall_df = pd.DataFrame(overall_summary)
             # self.export_to_csv(overall_df, "m1_overall_change_summary")
-        
+
         return data
 
     def load_and_clean_data(self, csv_dir="m1_trend_analysis_results"):
         """直接使用内存中的趋势分析数据，不再从CSV加载"""
-
 
         # 如果没有在analyze_trends中直接设置raw_data，我们从trends和significant_opportunities创建它
         # 这里我们直接使用内存中的数据
@@ -806,7 +795,7 @@ class M1DataAnalyzerAndTrainer:
         else:
             print("❌ 没有可用的趋势分析数据")
             return False
-        
+
         # 数据清洗：过滤无效数据
         self.raw_data = core_data.copy()
         self.raw_data['start_time'] = pd.to_datetime(self.raw_data['start_time'], errors='coerce')
@@ -831,21 +820,13 @@ class M1DataAnalyzerAndTrainer:
         # 1. 时间特征（交易时段是核心）
         df['hour'] = df['start_time'].dt.hour
         df['weekday'] = df['start_time'].dt.weekday
-        # 一周七天标识特征
-        df['is_monday'] = df['weekday'].apply(lambda x: 1 if x == 0 else 0)
-        df['is_tuesday'] = df['weekday'].apply(lambda x: 1 if x == 1 else 0)
-        df['is_wednesday'] = df['weekday'].apply(lambda x: 1 if x == 2 else 0)
-        df['is_thursday'] = df['weekday'].apply(lambda x: 1 if x == 3 else 0)
-        df['is_friday'] = df['weekday'].apply(lambda x: 1 if x == 4 else 0)
-        df['is_saturday'] = df['weekday'].apply(lambda x: 1 if x == 5 else 0)
-        df['is_sunday'] = df['weekday'].apply(lambda x: 1 if x == 6 else 0)
         # 区分交易时段（亚洲盘/欧盘/美盘）
         df['session_asia'] = df['hour'].apply(lambda x: 1 if 0 <= x <= 8 else 0)
         df['session_europe'] = df['hour'].apply(lambda x: 1 if 9 <= x <= 17 else 0)
         df['session_us'] = df['hour'].apply(lambda x: 1 if 18 <= x <= 23 else 0)
 
         # 2. 价格特征
-        df['amplitude_is_multiple_of_ten'] = df['total_change'].apply(lambda x: 1 if abs(x) % 10 < 0.1 or abs(x) % 10 > 9.9 else 0)  # 波动幅度是否为10的倍数
+        df['price_round'] = df['start_price'].apply(lambda x: round(x / 10) * 10)  # 价格整数位（心理关口）
         df['amplitude_ratio'] = abs(df['total_change']) / df['duration_minutes']  # 每分钟波动幅度
 
         # 3. 成交量特征（如果存在）
@@ -860,92 +841,81 @@ class M1DataAnalyzerAndTrainer:
 
         # 4. 历史趋势特征（简单统计，可扩展）
         df['rolling_amplitude'] = df['total_change'].rolling(window=5).mean().fillna(0)
-        
+
         # 新增：趋势反转相关特征
         df['trend_direction'] = (df['total_change'] > 0).astype(int)  # 当前趋势方向
-        
+
         # 计算连续同向趋势的数量
         df['consecutive_same_trend'] = 0
         current_streak = 1
         for i in range(1, len(df)):
-            if df['trend_direction'].iloc[i] == df['trend_direction'].iloc[i-1]:
+            if df['trend_direction'].iloc[i] == df['trend_direction'].iloc[i - 1]:
                 current_streak += 1
             else:
                 current_streak = 1
             df['consecutive_same_trend'].iloc[i] = current_streak
-        
+
         # 趋势持续时间的移动平均
         df['trend_duration_ma'] = df['duration_minutes'].rolling(window=5, min_periods=1).mean()
-        
+
         # 趋势强度（幅度/持续时间）
         df['trend_strength'] = df['total_change'] / df['duration_minutes']
-        
+
         # 新增：预测未来反转信号（基于下一个趋势方向）
         df['next_trend_direction'] = df['trend_direction'].shift(-1)  # 下一个趋势方向
         df['will_reverse'] = (df['trend_direction'] != df['next_trend_direction']).astype(int)  # 即将反转的信号
-        
+
         # 价格偏离均线的程度（可能预示反转）
-        df['price_deviation'] = (df['start_price'] - df['start_price'].rolling(window=10, min_periods=1).mean()) / df['start_price'].rolling(window=10, min_periods=1).std()
-        
-        # 计算移动平均线
-        df['sma_5'] = df['start_price'].rolling(window=5).mean()
-        df['sma_10'] = df['start_price'].rolling(window=10).mean()
-        df['sma_20'] = df['start_price'].rolling(window=20).mean()
-        
-        # 计算均线方向
-        df['sma_5_direction'] = np.where(df['start_price'] > df['sma_5'], 1, 0)
-        df['sma_10_direction'] = np.where(df['start_price'] > df['sma_10'], 1, 0)
-        df['sma_20_direction'] = np.where(df['start_price'] > df['sma_20'], 1, 0)
-        
+        df['price_deviation'] = (df['start_price'] - df['start_price'].rolling(window=10, min_periods=1).mean()) / df[
+            'start_price'].rolling(window=10, min_periods=1).std()
+
         # RSI指标
         df['rsi'] = self.calculate_rsi_simple(df['start_price'].values)
-        
-        # RSI方向
-        df['rsi_direction'] = np.where(df['rsi'] > 50, 1, 0)
-        
+
         # 布林带位置
         upper, middle, lower = self.calculate_bollinger_bands(df['start_price'])
-        df['bb_position'] = (df['start_price'] - lower) / (upper - lower) if upper is not None and lower is not None else 0.5
-        
+        df['bb_position'] = (df['start_price'] - lower) / (
+                    upper - lower) if upper is not None and lower is not None else 0.5
+
         # 波动率特征
         df['volatility'] = df['start_price'].rolling(window=10).std() / df['start_price']
-        
+
         # 新增：特定时段的反转特征
         # 计算小时特征
         df['hour'] = df['start_time'].dt.hour
-        
+
         # 识别亚盘高点和低点（08:00-17:00）
         asian_session_mask = (df['hour'] >= 8) & (df['hour'] < 17)
         if asian_session_mask.any():
             asian_high = df.loc[asian_session_mask, 'start_price'].max()
             asian_low = df.loc[asian_session_mask, 'start_price'].min()
-            
+
             # 标识当前是否为欧盘或美盘
             european_session_mask = (df['hour'] >= 18) & (df['hour'] < 22)
             us_session_mask = (df['hour'] >= 22) | (df['hour'] < 7)
-            
+
             # 欧盘是否突破亚盘高点/低点
             df['euro_breaks_asian_high'] = 0
             df['euro_breaks_asian_low'] = 0
             if european_session_mask.any():
                 df.loc[european_session_mask, 'euro_breaks_asian_high'] = (
-                    df.loc[european_session_mask, 'start_price'] > asian_high
+                        df.loc[european_session_mask, 'start_price'] > asian_high
                 ).astype(int)
-                
+
                 df.loc[european_session_mask, 'euro_breaks_asian_low'] = (
-                    df.loc[european_session_mask, 'start_price'] < asian_low
+                        df.loc[european_session_mask, 'start_price'] < asian_low
                 ).astype(int)
-            
+
             # 美盘是否突破亚盘高点/低点
             df['us_breaks_asian_high'] = 0
             df['us_breaks_asian_low'] = 0
             if us_session_mask.any():
                 df.loc[us_session_mask, 'us_breaks_asian_high'] = (
-                    df.loc[us_session_mask, 'start_price'] > asian_high
+                        df.loc[us_session_mask, 'start_price'] > asian_high
                 ).astype(int)
-                
+
                 df.loc[us_session_mask, 'us_breaks_asian_low'] = (
-                    df.loc[us_session_mask, 'start_price'] < asian_low
+                        df.loc[us_session_mask, 'start_price'] < asian_low
                 ).astype(int)
         else:
             # 如果没有亚盘数据，设置默认值
@@ -953,7 +923,7 @@ class M1DataAnalyzerAndTrainer:
             df['euro_breaks_asian_low'] = 0
             df['us_breaks_asian_high'] = 0
             df['us_breaks_asian_low'] = 0
-        
+
         # 新增：创新高新低特征
         df['new_high'] = 0
         df['new_low'] = 0
@@ -969,40 +939,40 @@ class M1DataAnalyzerAndTrainer:
         # 新增：真假突破特征
         # 计算支撑阻力位（基于滚动窗口的高低点）
         df['resistance'] = df['start_price'].rolling(window=20, center=False).max()  # 阻力位
-        df['support'] = df['start_price'].rolling(window=20, center=False).min()    # 支撑位
-        
+        df['support'] = df['start_price'].rolling(window=20, center=False).min()  # 支撑位
+
         # 判断是否突破支撑阻力位
         df['breaks_resistance'] = (df['start_price'] > df['resistance'].shift(1)).astype(int)
         df['breaks_support'] = (df['start_price'] < df['support'].shift(1)).astype(int)
-        
+
         # 突破有效性判断（突破后能否维持）
         df['break_validity'] = 0
         for i in range(21, len(df)):  # 从第21个数据点开始（因为需要20个点计算支撑阻力）
             if df['breaks_resistance'].iloc[i] == 1:
                 # 如果向上突破阻力，看后面几个点是否能维持在阻力上方
-                future_prices = df['start_price'].iloc[i:i+5] if i+5 < len(df) else df['start_price'].iloc[i:]
+                future_prices = df['start_price'].iloc[i:i + 5] if i + 5 < len(df) else df['start_price'].iloc[i:]
                 if len(future_prices) > 0 and (future_prices > df['resistance'].iloc[i]).any():
                     df['break_validity'].iloc[i] = 1  # 有效突破
                 else:
                     df['break_validity'].iloc[i] = -1  # 假突破
             elif df['breaks_support'].iloc[i] == 1:
                 # 如果向下突破支撑，看后面几个点是否能维持在支撑下方
-                future_prices = df['start_price'].iloc[i:i+5] if i+5 < len(df) else df['start_price'].iloc[i:]
+                future_prices = df['start_price'].iloc[i:i + 5] if i + 5 < len(df) else df['start_price'].iloc[i:]
                 if len(future_prices) > 0 and (future_prices < df['support'].iloc[i]).any():
                     df['break_validity'].iloc[i] = 1  # 有效突破
                 else:
                     df['break_validity'].iloc[i] = -1  # 假突破
-        
+
         # 成交量确认突破（如果存在成交量数据）
         if 'volume' in df.columns:
             df['volume_ma'] = df['volume'].rolling(window=20).mean()
             df['high_volume_on_breakout'] = (
-                (df['breaks_resistance'] | df['breaks_support']) & 
-                (df['volume'] > df['volume_ma'] * 1.5)
+                    (df['breaks_resistance'] | df['breaks_support']) &
+                    (df['volume'] > df['volume_ma'] * 1.5)
             ).astype(int)  # 高成交量确认突破
         else:
             df['high_volume_on_breakout'] = 0
-        
+
         # RSI确认突破（突破时RSI是否在合理区间）
         df['rsi_confirmation'] = 0
         for i in range(1, len(df)):
@@ -1012,97 +982,73 @@ class M1DataAnalyzerAndTrainer:
             elif df['breaks_support'].iloc[i] == 1:  # 向下突破
                 if df['rsi'].iloc[i] is not None and 30 < df['rsi'].iloc[i] < 50:
                     df['rsi_confirmation'].iloc[i] = 1  # RSI确认向下突破
-        
+
         # 新增：回调识别特征
         # 计算价格回撤比例（用于识别回调）
         df['price_retrace_ratio'] = 0.0
         df['recent_high'] = df['start_price'].rolling(window=20, min_periods=1).max()
         df['recent_low'] = df['start_price'].rolling(window=20, min_periods=1).min()
-        
+
         for i in range(1, len(df)):
             current_price = df['start_price'].iloc[i]
-            recent_high = df['recent_high'].iloc[i-1]
-            recent_low = df['recent_low'].iloc[i-1]
-            
+            recent_high = df['recent_high'].iloc[i - 1]
+            recent_low = df['recent_low'].iloc[i - 1]
+
             # 计算从近期高点的回撤比例
             if recent_high != recent_low:
                 if df['trend_direction'].iloc[i] == 1:  # 当前处于上升趋势
                     df['price_retrace_ratio'].iloc[i] = (recent_high - current_price) / (recent_high - recent_low)
                 else:  # 当前处于下降趋势
                     df['price_retrace_ratio'].iloc[i] = (current_price - recent_low) / (recent_high - recent_low)
-            
+
         # 识别回调模式 - 深度回调（可能预示趋势反转）
         df['deep_retrace'] = (df['price_retrace_ratio'] > 0.5).astype(int)  # 深度回调
-        df['shallow_retrace'] = ((df['price_retrace_ratio'] > 0.2) & (df['price_retrace_ratio'] <= 0.5)).astype(int)  # 浅回调
-        
-        # 计算均线方向一致性
-        df['ma_direction_consistency'] = (
-            (df['sma_5_direction'] == df['sma_10_direction']).astype(int) + 
-            (df['sma_10_direction'] == df['sma_20_direction']).astype(int) + 
-            (df['sma_5_direction'] == df['sma_20_direction']).astype(int)
-        )
-        
-        # RSI与价格方向一致性
-        df['rsi_price_consistency'] = np.where(
-            (df['start_price'].diff() > 0) == (df['rsi_direction'] == 1), 1, 0
-        ).astype(int)
-        
-        # 检测局部极值点（拐点）
-        df['local_top'] = 0  # 局部高点
-        df['local_bottom'] = 0  # 局部低点
-        
-        for i in range(1, len(df)-1):
-            # 检测局部高点（当前价格比前后都高）
-            if df['start_price'].iloc[i] > df['start_price'].iloc[i-1] and df['start_price'].iloc[i] > df['start_price'].iloc[i+1]:
-                df['local_top'].iloc[i] = 1
-            # 检测局部低点（当前价格比前后都低）
-            elif df['start_price'].iloc[i] < df['start_price'].iloc[i-1] and df['start_price'].iloc[i] < df['start_price'].iloc[i+1]:
-                df['local_bottom'].iloc[i] = 1
-        
-        # 检测连续上涨/下跌后的减速
-        df['price_velocity'] = df['start_price'].diff().rolling(window=3).mean()  # 价格速度
-        df['velocity_change'] = df['price_velocity'].diff()  # 速度变化
-        
+        df['shallow_retrace'] = ((df['price_retrace_ratio'] > 0.2) & (df['price_retrace_ratio'] <= 0.5)).astype(
+            int)  # 浅回调
+
         # 动量背离特征 - RSI与价格走势背离
         df['momentum_divergence'] = 0
         df['price_change'] = df['start_price'].diff()
         df['rsi_change'] = df['rsi'].diff()
-        
+
         for i in range(2, len(df)):
             # 看涨背离：价格创新低但RSI未创新低
-            if (df['start_price'].iloc[i] < df['start_price'].iloc[i-2] and 
-                df['recent_low'].iloc[i] == df['start_price'].iloc[i] and  # 价格创新低
-                df['rsi'].iloc[i] > df['rsi'].iloc[i-2]):  # 但RSI未创新低
+            if (df['start_price'].iloc[i] < df['start_price'].iloc[i - 2] and
+                    df['recent_low'].iloc[i] == df['start_price'].iloc[i] and  # 价格创新低
+                    df['rsi'].iloc[i] > df['rsi'].iloc[i - 2]):  # 但RSI未创新低
                 df['momentum_divergence'].iloc[i] = 1
             # 看跌背离：价格创新高但RSI未创新高
-            elif (df['start_price'].iloc[i] > df['start_price'].iloc[i-2] and 
+            elif (df['start_price'].iloc[i] > df['start_price'].iloc[i - 2] and
                   df['recent_high'].iloc[i] == df['start_price'].iloc[i] and  # 价格创新高
-                  df['rsi'].iloc[i] < df['rsi'].iloc[i-2]):  # 但RSI未创新高
+                  df['rsi'].iloc[i] < df['rsi'].iloc[i - 2]):  # 但RSI未创新高
                 df['momentum_divergence'].iloc[i] = -1
-        
+
         # MACD相关特征（简化版）
         df['ema_fast'] = df['start_price'].ewm(span=12).mean()
         df['ema_slow'] = df['start_price'].ewm(span=26).mean()
         df['macd'] = df['ema_fast'] - df['ema_slow']
         df['macd_signal'] = df['macd'].ewm(span=9).mean()
         df['macd_histogram'] = df['macd'] - df['macd_signal']
-        
+
         # MACD柱状图变化率（用于识别动能变化）
         df['macd_hist_change'] = df['macd_histogram'].diff()
-        
+
         # 价格与移动平均线的距离（用于识别回调后的重新测试）
-        df['price_ma_distance'] = (df['start_price'] - df['start_price'].rolling(window=20).mean()) / df['start_price'].rolling(window=20).std()
-        
+        df['price_ma_distance'] = (df['start_price'] - df['start_price'].rolling(window=20).mean()) / df[
+            'start_price'].rolling(window=20).std()
+
         # 振荡器回调特征（基于RSI）
         df['rsi_oscillation'] = 0
         for i in range(2, len(df)):
             # RSI从超买/超卖区域返回
-            if df['rsi'].iloc[i-1] is not None and df['rsi'].iloc[i-2] is not None:
+            if df['rsi'].iloc[i - 1] is not None and df['rsi'].iloc[i - 2] is not None:
                 # 从超买区返回
-                if df['rsi'].iloc[i-2] > 70 and df['rsi'].iloc[i-1] <= 70 and df['rsi'].iloc[i] > df['rsi'].iloc[i-1]:
+                if df['rsi'].iloc[i - 2] > 70 and df['rsi'].iloc[i - 1] <= 70 and df['rsi'].iloc[i] > df['rsi'].iloc[
+                    i - 1]:
                     df['rsi_oscillation'].iloc[i] = 1
                 # 从超卖区返回
-                elif df['rsi'].iloc[i-2] < 30 and df['rsi'].iloc[i-1] >= 30 and df['rsi'].iloc[i] < df['rsi'].iloc[i-1]:
+                elif df['rsi'].iloc[i - 2] < 30 and df['rsi'].iloc[i - 1] >= 30 and df['rsi'].iloc[i] < df['rsi'].iloc[
+                    i - 1]:
                     df['rsi_oscillation'].iloc[i] = -1
 
         # 5. 目标变量（实战核心：方向+时长+幅度+反转）
@@ -1117,29 +1063,25 @@ class M1DataAnalyzerAndTrainer:
 
         # 6. 特征筛选（只保留数值特征用于训练）
         feature_cols = [
-            'hour', 'weekday', 'is_monday', 'is_tuesday', 'is_wednesday', 'is_thursday', 'is_friday', 'is_saturday', 'is_sunday',
-            'session_asia', 'session_europe', 'session_us',
-            'start_price', 'amplitude_is_multiple_of_ten', 'amplitude_ratio', 'rolling_amplitude',
+            'hour', 'weekday', 'session_asia', 'session_europe', 'session_us',
+            'start_price', 'price_round', 'amplitude_ratio', 'rolling_amplitude',
             'consecutive_same_trend', 'trend_duration_ma', 'trend_strength',
             'price_deviation', 'rsi', 'bb_position', 'volatility',
-            'sma_5_direction', 'sma_10_direction', 'sma_20_direction',
-            'rsi_direction', 'ma_direction_consistency', 'rsi_price_consistency',
-            'local_top', 'local_bottom', 'price_velocity', 'velocity_change',
-            'euro_breaks_asian_high', 'euro_breaks_asian_low', 
+            'euro_breaks_asian_high', 'euro_breaks_asian_low',
             'us_breaks_asian_high', 'us_breaks_asian_low',
-            'new_high', 'new_low', 'breaks_resistance', 'breaks_support', 
+            'new_high', 'new_low', 'breaks_resistance', 'breaks_support',
             'break_validity', 'high_volume_on_breakout', 'rsi_confirmation',
-            'price_retrace_ratio', 'deep_retrace', 'shallow_retrace', 
+            'price_retrace_ratio', 'deep_retrace', 'shallow_retrace',
             'momentum_divergence', 'macd_histogram', 'macd_hist_change',
             'price_ma_distance', 'rsi_oscillation'
         ]
-        
+
         # 添加成交量相关特征
         if 'start_volume' in df.columns:
             feature_cols.append('start_volume')
         if 'volume_ma_ratio' in df.columns:
             feature_cols.append('volume_ma_ratio')
-        
+
         # 确保所有特征列存在
         existing_features = [col for col in feature_cols if col in df.columns]
         self.features = df[existing_features].fillna(0)
@@ -1155,7 +1097,7 @@ class M1DataAnalyzerAndTrainer:
         X_train, X_test, y_train_trend, y_test_trend = train_test_split(
             self.features, self.target_trend, test_size=0.3, random_state=42
         )
-        
+
         # 新增：训练趋势反转预测模型
         # 检查反转标签的分布，如果所有标签都相同，则跳过反转模型训练
         unique_reversal_labels = np.unique(self.target_reversal)
@@ -1163,7 +1105,7 @@ class M1DataAnalyzerAndTrainer:
             X_train_rev, X_test_rev, y_train_rev, y_test_rev = train_test_split(
                 self.features, self.target_reversal, test_size=0.3, random_state=42
             )
-            
+
             # 训练趋势反转预测模型
             self.reversal_model = RandomForestClassifier(
                 n_estimators=150, random_state=42, max_depth=12, min_samples_split=8
@@ -1211,7 +1153,7 @@ class M1DataAnalyzerAndTrainer:
         # 保存模型（实战中可直接加载，无需重复训练）
         model_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         joblib.dump(self.trend_model, os.path.join(self.model_dir, f"trend_model_{model_ts}.pkl"))
-        
+
         # 保存反转模型（如果存在）
         if self.reversal_model is not None:
             joblib.dump(self.reversal_model, os.path.join(self.model_dir, f"reversal_model_{model_ts}.pkl"))
@@ -1220,7 +1162,7 @@ class M1DataAnalyzerAndTrainer:
             # 保存一个表示反转模型不存在的标记
             with open(os.path.join(self.model_dir, f"reversal_model_{model_ts}.txt"), 'w') as f:
                 f.write(f"Constant prediction: {unique_reversal_labels[0] if len(unique_reversal_labels) > 0 else 0}")
-        
+
         joblib.dump(self.duration_model, os.path.join(self.model_dir, f"duration_model_{model_ts}.pkl"))
         joblib.dump(self.amplitude_model, os.path.join(self.model_dir, f"amplitude_model_{model_ts}.pkl"))
         joblib.dump(self.scaler, os.path.join(self.model_dir, f"scaler_{model_ts}.pkl"))
@@ -1233,7 +1175,7 @@ class M1DataAnalyzerAndTrainer:
         if not mt5.initialize():
             print(f"❌ MT5初始化失败: {mt5.last_error()}")
             return datetime.now()  # 如果连接失败，返回当前时间
-        
+
         # 检查交易品种
         symbol = "XAUUSD"
         symbol_info = mt5.symbol_info(symbol)
@@ -1252,133 +1194,62 @@ class M1DataAnalyzerAndTrainer:
         # 获取最近的M1数据
         # 只需要获取最新的1根K线
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
-        
+
         if rates is None or len(rates) == 0:
             print(f"❌ 未获取到最新的M1数据")
             mt5.shutdown()
             return datetime.now()
-        
+
         # 获取最新K线的时间
         latest_time = pd.to_datetime(rates[0]['time'], unit='s')
-        
+
         # print(f"✅ 最新M1数据时间: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
+
         # 断开MT5连接
         mt5.shutdown()
-        
+
         return latest_time
-
-    def get_short_term_trend(self, num_candles=20):
-        """
-        获取最近N根K线的短期趋势，使用移动平均线判断
-        :param num_candles: 考虑的K线索引，默认为20
-        :return: 1 表示短期上涨趋势，0 表示短期下跌趋势
-        """
-        # 初始化MT5连接
-        if not mt5.initialize():
-            print(f"❌ MT5初始化失败: {mt5.last_error()}")
-            return 0  # 默认返回下跌趋势
-        
-        # 检查交易品种
-        symbol = "XAUUSD"
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
-            print(f"❌ 品种 {symbol} 不可用")
-            mt5.shutdown()
-            return 0
-
-        if not symbol_info.visible:
-            if not mt5.symbol_select(symbol, True):
-                print(f"❌ 启用品种失败")
-                mt5.shutdown()
-                return 0
-
-        # 获取最近的N+20根K线数据，用于计算移动平均线（额外获取一些数据以确保计算准确性）
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, num_candles + 20)
-        
-        if rates is None or len(rates) < num_candles:
-            print(f"⚠️  未获取到足够的M1数据({num_candles}根)，实际获取{len(rates) if rates is not None else 0}根")
-            mt5.shutdown()
-            # 如果数据不足，返回默认趋势
-            if rates is not None and len(rates) > 0:
-                # 比较首尾收盘价判断趋势
-                if rates[-1]['close'] > rates[0]['close']:
-                    return 1  # 短期上涨
-                else:
-                    return 0  # 短期下跌
-            return 0
-        
-        # 只取最近的num_candles根K线
-        recent_rates = rates[:num_candles]
-        closes = [rate['close'] for rate in recent_rates]
-        
-        # 计算移动平均线趋势
-        # 将收盘价数组转换为numpy数组便于计算
-        import numpy as np
-        closes_array = np.array(closes)
-        
-        # 计算简单移动平均线(SMA) - 对最近num_candles根K线的收盘价求平均
-        sma_current = np.mean(closes_array)
-        
-        # 计算前一个时间段的移动平均线，用于比较趋势方向
-        # 取再往前的num_candles根K线
-        older_rates = rates[num_candles:num_candles*2] if len(rates) >= num_candles*2 else rates[len(closes_array):len(closes_array)+num_candles]
-        if len(older_rates) > 0:
-            older_closes = [rate['close'] for rate in older_rates]
-            sma_previous = np.mean(np.array(older_closes))
-            
-            # 比较当前SMA与前一个SMA的大小来判断趋势
-            trend_direction = 1 if sma_current > sma_previous else 0
-        else:
-            # 如果没有足够的历史数据，比较最新收盘价与当前SMA
-            latest_close = closes_array[0]  # 最新的收盘价
-            trend_direction = 1 if latest_close > sma_current else 0
-        
-        # 断开MT5连接
-        mt5.shutdown()
-        
-        return trend_direction
 
     def generate_trading_signals(self):
         """生成可直接下单的实战交易信号"""
         print(
-            f"{'开仓时间':<15} {'原方向':<8} {'实际方向':<10}  {'反转概率':<10} {'止盈幅度':<10} {'止损幅度':<10} {'置信度':<8} {'交易时段':<8}")
+            f"{'开仓时间':<15} {'持仓时长':<10} {'方向':<8} {'反转概率':<8} {'止盈幅度':<8} {'止损幅度':<10} {'置信度':<8} {'风险收益比':<12} {'信号有效性':<8} {'交易时段':<8}")
 
         # 获取最新的M1数据时间
         latest_m1_time = self.get_latest_m1_time()
-        
+
         # 取最后一条数据的特征，预测下一个交易信号
         last_feature = self.features[-1].reshape(1, -1)
-        
+
         # 确保raw_data存在且不为空
         if len(self.raw_data) == 0:
             print("❌ 没有可用的历史数据，无法生成交易信号")
             return None
-        
+
         # 获取最后一行数据
         raw_last_data = self.raw_data.iloc[-1]
-        
+
         # 确保raw_last_data存在
         if raw_last_data is None:
             print("❌ 最后一行数据为空，无法生成交易信号")
             return None
-        
+
         # 创建last_raw_data变量用于后续使用
         last_raw_data = raw_last_data
 
         # 1. AI预测核心参数（自主判断）
         trend_pred = self.trend_model.predict(last_feature)[0]  # 0=跌，1=涨
         trend_confidence = self.trend_model.predict_proba(last_feature)[0][trend_pred] * 100  # 置信度
-        
+
         # 新增：预测趋势反转概率（处理模型可能为None的情况）
         if self.reversal_model is not None:
             reversal_prob = self.reversal_model.predict_proba(last_feature)[0][1] * 100  # 反转概率
             reversal_pred = self.reversal_model.predict(last_feature)[0]  # 1=反转，0=延续
-            
+
             # 增强反转检测逻辑：结合RSI、布林带等技术指标
             rsi_value = raw_last_data.get('rsi', None)
             bb_position = raw_last_data.get('bb_position', None)
-            
+
             # 如果RSI超买或超卖，增加反转概率
             if rsi_value is not None:
                 if rsi_value > 70:  # 超买区域
@@ -1387,7 +1258,7 @@ class M1DataAnalyzerAndTrainer:
                 elif rsi_value < 30:  # 超卖区域
                     reversal_prob += 15  # 增加反转概率
                     reversal_prob = min(reversal_prob, 100)  # 限制最大值
-            
+
             # 如果价格接近布林带上轨或下轨，增加反转概率
             if bb_position is not None:
                 if bb_position > 0.8:  # 接近上轨
@@ -1396,20 +1267,20 @@ class M1DataAnalyzerAndTrainer:
                 elif bb_position < 0.2:  # 接近下轨
                     reversal_prob += 10  # 增加反转概率
                     reversal_prob = min(reversal_prob, 100)  # 限制最大值
-            
+
             # 新增：增强回调识别逻辑
             # 检查深度回调特征
             deep_retrace = raw_last_data.get('deep_retrace', 0)
             if deep_retrace == 1:
                 reversal_prob += 20  # 深度回调增加反转概率
                 reversal_prob = min(reversal_prob, 100)
-            
+
             # 检查动量背离
             momentum_div = raw_last_data.get('momentum_divergence', 0)
             if momentum_div != 0:  # 存在动量背离
                 reversal_prob += 25  # 动量背离显著增加反转概率
                 reversal_prob = min(reversal_prob, 100)
-            
+
             # 检查MACD柱状图变化
             macd_hist_change = raw_last_data.get('macd_hist_change', 0)
             current_trend = raw_last_data.get('trend_direction', 0)
@@ -1419,55 +1290,29 @@ class M1DataAnalyzerAndTrainer:
             elif current_trend == 0 and macd_hist_change > 0:  # 下降趋势中MACD柱状图上升
                 reversal_prob += 10
                 reversal_prob = min(reversal_prob, 100)
-            
+
             # 检查RSI振荡特征
             rsi_osc = raw_last_data.get('rsi_oscillation', 0)
             if rsi_osc != 0:  # RSI从极端区域返回
                 reversal_prob += 12
                 reversal_prob = min(reversal_prob, 100)
-            
+
             # 检查价格与移动平均线距离
             ma_dist = raw_last_data.get('price_ma_distance', 0)
             if (current_trend == 1 and ma_dist > 2) or (current_trend == 0 and ma_dist < -2):  # 远离移动平均线
                 reversal_prob += 15  # 远离均线可能引发回调
                 reversal_prob = min(reversal_prob, 100)
-            
-            # 检查局部拐点特征
-            local_top = raw_last_data.get('local_top', 0)
-            local_bottom = raw_last_data.get('local_bottom', 0)
-            
-            # 如果检测到局部高点且当前为上涨趋势，增加反转概率
-            if local_top == 1 and current_trend == 1:
-                reversal_prob += 25  # 局部高点+上涨趋势 = 强反转信号
-                reversal_prob = min(reversal_prob, 100)
-            # 如果检测到局部低点且当前为下跌趋势，增加反转概率
-            elif local_bottom == 1 and current_trend == 0:
-                reversal_prob += 25  # 局部低点+下跌趋势 = 强反转信号
-                reversal_prob = min(reversal_prob, 100)
-            
-            # 检查速度变化（趋势减速）
-            velocity_change = raw_last_data.get('velocity_change', 0)
-            if current_trend == 1 and velocity_change < 0:  # 上涨中减速
-                reversal_prob += 10
-                reversal_prob = min(reversal_prob, 100)
-            elif current_trend == 0 and velocity_change > 0:  # 下跌中减速
-                reversal_prob += 10
-                reversal_prob = min(reversal_prob, 100)
         else:
             # 如果反转模型不存在，使用默认值
             reversal_prob = 0  # 默认反转概率为0
             reversal_pred = 0  # 默认不反转
-            
+
         duration_pred = self.duration_model.predict(last_feature)[0]  # 持仓时长（AI自主）
         amplitude_pred = self.amplitude_model.predict(last_feature)[0]  # 止盈幅度（AI自主）
 
         # 2. 风控过滤（不符合条件的信号直接丢弃）
         duration_pred = np.clip(duration_pred, MIN_TREND_DURATION, MAX_TREND_DURATION)  # 限制时长
         stop_loss_amplitude = amplitude_pred * STOP_LOSS_RATIO  # 止损幅度
-        
-        # 设置最低止损幅度为5美元，避免止损过小被市场波动触发
-        stop_loss_amplitude = max(stop_loss_amplitude, 5.0)
-        
         risk_reward = amplitude_pred / stop_loss_amplitude  # 风险收益比
 
         # 3. 计算具体交易时间 - 使用最新的M1时间
@@ -1492,64 +1337,14 @@ class M1DataAnalyzerAndTrainer:
                 session = "美盘"
             else:
                 session = "美盘(隔夜)"
-        
 
-        # 4. 信号有效性判断 - 只有检测到拐点才反转方向，并且考虑短期趋势
+        # 4. 信号有效性判断
         signal_valid = False
-        
-        # 保存原始方向
-        original_trend_pred = trend_pred
-        
-        # 检查是否检测到拐点（局部高点或低点）
-        current_data_point = raw_last_data  # 使用raw_last_data变量
-        local_top_detected = current_data_point.get('local_top', 0) if current_data_point is not None else 0
-        local_bottom_detected = current_data_point.get('local_bottom', 0) if current_data_point is not None else 0
-        
-        # 只有在检测到拐点且反转概率高时才反转方向
-        if reversal_prob >= 70 and (local_top_detected == 1 or local_bottom_detected == 1):
-            # 如果当前是上涨趋势且检测到局部高点，或当前是下跌趋势且检测到局部低点，则反转方向
-            current_trend = original_trend_pred
-            if (current_trend == 1 and local_top_detected == 1) or (current_trend == 0 and local_bottom_detected == 1):
-                trend_pred = 1 - trend_pred  # 反转方向：做多变做空，做空变做多
-
-        # 获取短期趋势（最近20根K线的平均趋势）
-        short_term_trend = self.get_short_term_trend()
-        
-        # 检查AI预测方向与短期趋势是否冲突
-        # 如果AI建议做空(0)，但短期趋势是上涨(1)，则信号无效
-        # 如果AI建议做多(1)，但短期趋势是下跌(0)，则信号无效
-        trend_conflict = (trend_pred == 0 and short_term_trend == 1) or (trend_pred == 1 and short_term_trend == 0)
-
-        # 仅当满足以下条件时，信号才有效：
-        # 1. 置信度达标
-        # 2. 风险收益比达标
-        # 3. 如果AI预测方向与短期趋势不一致，以短期趋势为准
         if trend_confidence >= CONFIDENCE_THRESHOLD and risk_reward >= RISK_REWARD_RATIO:
-            # 如果AI预测方向与短期趋势一致，则使用AI预测方向
-            if not trend_conflict:
-                signal_valid = True
-            else:
-                # 如果AI预测方向与短期趋势冲突，以短期趋势为准
-                print(f"⚠️  AI预测方向与短期趋势冲突，采用短期趋势方向")
-                # 修改预测方向为短期趋势方向
-                trend_pred = short_term_trend
-                signal_valid = True
-        else:
-            signal_valid = False
-            if trend_conflict:
-                print(f"❌ 信号过滤：AI预测方向与短期趋势冲突，信号被过滤")
+            signal_valid = True
 
         # 5. 格式化输出
-        original_trend_str = "做多" if original_trend_pred == 1 else "做空"
-        actual_trend_str = "做多" if trend_pred == 1 else "做空"
-        
-        # 如果方向被反转，添加特殊标记
-        # 只有在实际发生了方向反转时才标记
-        if original_trend_pred != trend_pred:
-            actual_trend_str_display = f"{actual_trend_str}(已根据短期趋势调整)"
-        else:
-            actual_trend_str_display = actual_trend_str
-        
+        trend_str = "做多" if trend_pred == 1 else "做空"
         valid_str = "✅ 有效" if signal_valid else "❌ 无效"
         open_time_str = open_time.strftime("%Y-%m-%d %H:%M") if pd.notna(open_time) else "未知"
 
@@ -1557,9 +1352,8 @@ class M1DataAnalyzerAndTrainer:
         self.trading_signals.append({
             "开仓时间": open_time_str,
             "平仓时间": close_time.strftime("%Y-%m-%d %H:%M") if pd.notna(close_time) else "未知",
-            "原方向": original_trend_str,
-            "实际方向": actual_trend_str,
             "持仓时长(分钟)": round(duration_pred, 0),
+            "交易方向": trend_str,
             "趋势反转概率(%)": round(reversal_prob, 1),
             # 根据用户偏好，不显示入场价格信息
             # "开仓价格": round(last_raw_data['start_price'], 2),
@@ -1572,45 +1366,37 @@ class M1DataAnalyzerAndTrainer:
         })
 
         # 打印单条信号（实战中可输出多条）
-        signal_str = f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
-        print(signal_str)
-        
-        # 记录交易信号到日志文件，格式与控制台输出一致，不包含时间戳
-        log_signal_str = f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
-        
-        # 将信号直接写入日志文件，不包含时间戳和其他信息
-        with open(log_dir / f"trading_signals_{datetime.now().strftime('%Y%m%d')}.log", "a", encoding="utf-8") as f:
-            f.write(log_signal_str + "\n")
-
+        print(
+            f"{open_time_str:<20} {round(duration_pred, 0):<10} {trend_str:<8} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {round(risk_reward, 2):<12} {valid_str:<10} {session:<10}")
 
         # 获取最后一条数据的特征值，分析关键突破特征
         raw_last_data = self.raw_data.iloc[-1]
         current_price = raw_last_data['start_price']
-        
+
         # 计算支撑阻力位
         recent_prices = self.raw_data['start_price'].tail(20)
         resistance = recent_prices.max()
         support = recent_prices.min()
-        
+
         # 判断是否接近支撑或阻力
         if abs(current_price - resistance) < (resistance - support) * 0.001:  # 接近阻力
             print(f"   📈 当前价格接近阻力位 {resistance:.2f}，可能存在反转压力")
         elif abs(current_price - support) < (resistance - support) * 0.001:  # 接近支撑
             print(f"   📉 当前价格接近支撑位 {support:.2f}，可能存在反弹支撑")
-        
+
         # 分析是否突破亚盘高点低点（适用于欧盘和美盘）
         # 从原始数据中提取时间信息
         raw_data_with_time = self.raw_data.copy()
         raw_data_with_time['start_time'] = pd.to_datetime(raw_data_with_time['start_time'])
         raw_data_with_time['hour'] = raw_data_with_time['start_time'].dt.hour
-        
+
         if session in ["欧盘", "美盘"]:
             # 计算亚盘时段的高点低点（假设最近亚盘数据）
             asian_data = raw_data_with_time[(raw_data_with_time['hour'] >= 8) & (raw_data_with_time['hour'] < 17)]
             if len(asian_data) > 0:
                 asian_high = asian_data['start_price'].max()
                 asian_low = asian_data['start_price'].min()
-                
+
                 if current_price > asian_high * 0.999:  # 接近突破亚盘高点
                     # 使用AI模型预测突破有效性
                     # 基于当前特征预测这是否是假突破
@@ -1623,7 +1409,8 @@ class M1DataAnalyzerAndTrainer:
                             rsi_value = raw_last_data['rsi']
                             if rsi_value > 70:  # 超买区域，可能是假突破
                                 break_validity_prediction = -1  # 预测为假突破
-                                print(f"   🚀 AI预测突破亚盘高点 {asian_high:.2f} - 疑似假突破 (RSI={rsi_value:.1f}，超买状态)")
+                                print(
+                                    f"   🚀 AI预测突破亚盘高点 {asian_high:.2f} - 疑似假突破 (RSI={rsi_value:.1f}，超买状态)")
                             elif rsi_value > 50:  # 确认突破
                                 print(f"   🚀 AI确认突破亚盘高点 {asian_high:.2f} - 有效突破 (RSI={rsi_value:.1f})")
                             else:
@@ -1635,14 +1422,15 @@ class M1DataAnalyzerAndTrainer:
                     if 'rsi' in self.raw_data.columns and pd.notna(raw_last_data.get('rsi')):
                         rsi_value = raw_last_data['rsi']
                         if rsi_value < 30:  # 超卖区域，可能是假突破
-                            print(f"   📌 AI预测突破亚盘低点 {asian_low:.2f} - 疑似假突破 (RSI={rsi_value:.1f}，超卖状态)")
+                            print(
+                                f"   📌 AI预测突破亚盘低点 {asian_low:.2f} - 疑似假突破 (RSI={rsi_value:.1f}，超卖状态)")
                         elif rsi_value < 50:  # 确认向下突破
                             print(f"   📌 AI确认突破亚盘低点 {asian_low:.2f} - 有效突破 (RSI={rsi_value:.1f})")
                         else:
                             print(f"   📌 当前价格接近突破亚盘低点 {asian_low:.2f}，RSI={rsi_value:.1f}，需谨慎判断")
                     else:
                         print(f"   📌 当前价格接近突破亚盘低点 {asian_low:.2f}，但缺少RSI指标确认")
-        
+
         # 显示RSI和趋势强度
         if 'rsi' in self.raw_data.columns and pd.notna(raw_last_data.get('rsi')):
             rsi_value = raw_last_data['rsi']
@@ -1650,19 +1438,19 @@ class M1DataAnalyzerAndTrainer:
                 print(f"   ⚠️  RSI值为 {rsi_value:.2f}，市场可能超买")
             elif rsi_value < 30:
                 print(f"   ⚠️  RSI值为 {rsi_value:.2f}，市场可能超卖")
-        
+
         # 分析深度回调
         deep_retrace = raw_last_data.get('deep_retrace', 0)
         if deep_retrace == 1:
             print(f"   🔄 检测到深度回调模式，趋势反转可能性较高")
-        
+
         # 分析动量背离
         momentum_div = raw_last_data.get('momentum_divergence', 0)
         if momentum_div == 1:
             print(f"   📊 检测到看涨动量背离，可能预示趋势底部")
         elif momentum_div == -1:
             print(f"   📊 检测到看跌动量背离，可能预示趋势顶部")
-        
+
         # 分析MACD柱状图变化
         macd_hist_change = raw_last_data.get('macd_hist_change', 0)
         current_trend = raw_last_data.get('trend_direction', 0)
@@ -1670,14 +1458,14 @@ class M1DataAnalyzerAndTrainer:
             print(f"   📈 上升趋势中MACD柱状图收缩，上升动能减弱")
         elif current_trend == 0 and macd_hist_change > 0:
             print(f"   📉 下降趋势中MACD柱状图扩张，下降动能增强")
-        
+
         # 分析RSI振荡
         rsi_osc = raw_last_data.get('rsi_oscillation', 0)
         if rsi_osc == 1:
             print(f"   📈 RSI从超卖区域回升，可能预示反弹")
         elif rsi_osc == -1:
             print(f"   📉 RSI从超买区域回落，可能预示回调")
-        
+
         # 分析价格与移动平均线距离
         ma_dist = raw_last_data.get('price_ma_distance', 0)
         if abs(ma_dist) > 2:
@@ -1685,14 +1473,14 @@ class M1DataAnalyzerAndTrainer:
                 print(f"   📈 价格远离移动平均线上方，存在回调压力")
             else:
                 print(f"   📉 价格远离移动平均线下方，存在反弹动力")
-        
+
         # 市场状态总结
         market_state = ""
         if trend_pred == 1:
             market_state = "📈 顺势做多"
         else:
             market_state = "📉 顺势做空"
-        
+
         if reversal_prob > 70:
             market_state += " (警惕反转)"
         elif reversal_prob < 30:
@@ -1700,10 +1488,13 @@ class M1DataAnalyzerAndTrainer:
         else:
             market_state += " (趋势不确定)"
 
-
         # 实战下单建议
         if signal_valid:
-            print(f"\n📝 实战下单建议：开仓时间：{open_time_str} | 交易时段：{session} | 交易方向：{actual_trend_str_display}黄金M1 | 开仓价格：{round(last_raw_data['start_price'], 2)}美元 | 止盈设置：{round(last_raw_data['start_price'] + (amplitude_pred if trend_pred == 1 else -amplitude_pred), 2)}美元 | 止损设置：{round(last_raw_data['start_price'] - (stop_loss_amplitude if trend_pred == 1 else -stop_loss_amplitude), 2)}美元")
+            print(
+                f"\n📝 实战下单建议：开仓时间：{open_time_str} | 交易时段：{session} | 交易方向：{trend_str}黄金M1 | 开仓价格：{round(last_raw_data['start_price'], 2)}美元 | 止盈设置：{round(last_raw_data['start_price'] + (amplitude_pred if trend_pred == 1 else -amplitude_pred), 2)}美元 | 止损设置：{round(last_raw_data['start_price'] - (stop_loss_amplitude if trend_pred == 1 else -stop_loss_amplitude), 2)}美元 | 平仓时间：{close_time.strftime('%Y-%m-%d %H:%M')}（或达到止盈/止损立即平仓）")
+
+            if reversal_pred == 1 and reversal_prob > 70:
+                print(f"⚠️ 特别提醒：反转概率{reversal_prob}%，注意市场变化！")
 
         # 返回最新生成的信号
         return self.trading_signals[-1] if self.trading_signals else None
@@ -1739,11 +1530,10 @@ class M1DataAnalyzerAndTrainer:
 
 
 def main():
-
     analyzer_trainer = M1DataAnalyzerAndTrainer()
     analyzer_trainer.run_full_analysis_and_training(60)  # 分析过去60天的数据
 
-    
+
 def run():
     """供外部调用的运行函数"""
     analyzer_trainer = M1DataAnalyzerAndTrainer()

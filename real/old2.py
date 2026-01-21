@@ -1268,77 +1268,6 @@ class M1DataAnalyzerAndTrainer:
         
         return latest_time
 
-    def get_short_term_trend(self, num_candles=20):
-        """
-        获取最近N根K线的短期趋势，使用移动平均线判断
-        :param num_candles: 考虑的K线索引，默认为20
-        :return: 1 表示短期上涨趋势，0 表示短期下跌趋势
-        """
-        # 初始化MT5连接
-        if not mt5.initialize():
-            print(f"❌ MT5初始化失败: {mt5.last_error()}")
-            return 0  # 默认返回下跌趋势
-        
-        # 检查交易品种
-        symbol = "XAUUSD"
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
-            print(f"❌ 品种 {symbol} 不可用")
-            mt5.shutdown()
-            return 0
-
-        if not symbol_info.visible:
-            if not mt5.symbol_select(symbol, True):
-                print(f"❌ 启用品种失败")
-                mt5.shutdown()
-                return 0
-
-        # 获取最近的N+20根K线数据，用于计算移动平均线（额外获取一些数据以确保计算准确性）
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, num_candles + 20)
-        
-        if rates is None or len(rates) < num_candles:
-            print(f"⚠️  未获取到足够的M1数据({num_candles}根)，实际获取{len(rates) if rates is not None else 0}根")
-            mt5.shutdown()
-            # 如果数据不足，返回默认趋势
-            if rates is not None and len(rates) > 0:
-                # 比较首尾收盘价判断趋势
-                if rates[-1]['close'] > rates[0]['close']:
-                    return 1  # 短期上涨
-                else:
-                    return 0  # 短期下跌
-            return 0
-        
-        # 只取最近的num_candles根K线
-        recent_rates = rates[:num_candles]
-        closes = [rate['close'] for rate in recent_rates]
-        
-        # 计算移动平均线趋势
-        # 将收盘价数组转换为numpy数组便于计算
-        import numpy as np
-        closes_array = np.array(closes)
-        
-        # 计算简单移动平均线(SMA) - 对最近num_candles根K线的收盘价求平均
-        sma_current = np.mean(closes_array)
-        
-        # 计算前一个时间段的移动平均线，用于比较趋势方向
-        # 取再往前的num_candles根K线
-        older_rates = rates[num_candles:num_candles*2] if len(rates) >= num_candles*2 else rates[len(closes_array):len(closes_array)+num_candles]
-        if len(older_rates) > 0:
-            older_closes = [rate['close'] for rate in older_rates]
-            sma_previous = np.mean(np.array(older_closes))
-            
-            # 比较当前SMA与前一个SMA的大小来判断趋势
-            trend_direction = 1 if sma_current > sma_previous else 0
-        else:
-            # 如果没有足够的历史数据，比较最新收盘价与当前SMA
-            latest_close = closes_array[0]  # 最新的收盘价
-            trend_direction = 1 if latest_close > sma_current else 0
-        
-        # 断开MT5连接
-        mt5.shutdown()
-        
-        return trend_direction
-
     def generate_trading_signals(self):
         """生成可直接下单的实战交易信号"""
         print(
@@ -1494,7 +1423,7 @@ class M1DataAnalyzerAndTrainer:
                 session = "美盘(隔夜)"
         
 
-        # 4. 信号有效性判断 - 只有检测到拐点才反转方向，并且考虑短期趋势
+        # 4. 信号有效性判断 - 只有检测到拐点才反转方向
         signal_valid = False
         
         # 保存原始方向
@@ -1512,32 +1441,8 @@ class M1DataAnalyzerAndTrainer:
             if (current_trend == 1 and local_top_detected == 1) or (current_trend == 0 and local_bottom_detected == 1):
                 trend_pred = 1 - trend_pred  # 反转方向：做多变做空，做空变做多
 
-        # 获取短期趋势（最近20根K线的平均趋势）
-        short_term_trend = self.get_short_term_trend()
-        
-        # 检查AI预测方向与短期趋势是否冲突
-        # 如果AI建议做空(0)，但短期趋势是上涨(1)，则信号无效
-        # 如果AI建议做多(1)，但短期趋势是下跌(0)，则信号无效
-        trend_conflict = (trend_pred == 0 and short_term_trend == 1) or (trend_pred == 1 and short_term_trend == 0)
-
-        # 仅当满足以下条件时，信号才有效：
-        # 1. 置信度达标
-        # 2. 风险收益比达标
-        # 3. 如果AI预测方向与短期趋势不一致，以短期趋势为准
         if trend_confidence >= CONFIDENCE_THRESHOLD and risk_reward >= RISK_REWARD_RATIO:
-            # 如果AI预测方向与短期趋势一致，则使用AI预测方向
-            if not trend_conflict:
-                signal_valid = True
-            else:
-                # 如果AI预测方向与短期趋势冲突，以短期趋势为准
-                print(f"⚠️  AI预测方向与短期趋势冲突，采用短期趋势方向")
-                # 修改预测方向为短期趋势方向
-                trend_pred = short_term_trend
-                signal_valid = True
-        else:
-            signal_valid = False
-            if trend_conflict:
-                print(f"❌ 信号过滤：AI预测方向与短期趋势冲突，信号被过滤")
+            signal_valid = True
 
         # 5. 格式化输出
         original_trend_str = "做多" if original_trend_pred == 1 else "做空"
@@ -1546,7 +1451,7 @@ class M1DataAnalyzerAndTrainer:
         # 如果方向被反转，添加特殊标记
         # 只有在实际发生了方向反转时才标记
         if original_trend_pred != trend_pred:
-            actual_trend_str_display = f"{actual_trend_str}(已根据短期趋势调整)"
+            actual_trend_str_display = f"{actual_trend_str}(已反转)"
         else:
             actual_trend_str_display = actual_trend_str
         

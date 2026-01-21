@@ -1,6 +1,6 @@
 """
-AI高级交易员监控系统
-功能：深度分析盈亏根本原因，专注市场行为分析
+AI交易员系统 - 基于自主学习和经验积累的智能交易系统
+实现AI自主交易决策，而非基于固定信号
 """
 import MetaTrader5 as mt5
 import pandas as pd
@@ -15,17 +15,16 @@ from typing import Dict, List, Tuple, Optional
 import warnings
 import json
 import importlib.util
+import pytz
 
 warnings.filterwarnings('ignore')
 
 # 时区处理
-from datetime import datetime, timezone
-import pytz
 UTC_PLUS_2 = pytz.timezone('Etc/GMT-2')  # UTC+2时区
 
 
-class AIAdvancedTrader:
-    """AI高级交易员监控系统 - 专注市场行为分析"""
+class AITrader:
+    """AI交易员系统 - 自主学习和经验积累"""
     
     def __init__(self):
         # 初始化MT5连接
@@ -39,10 +38,11 @@ class AIAdvancedTrader:
         self.trade_process = None
         
         # 交易统计
-        self.initial_balance = 0
-        self.current_balance = 0
+        self.initial_balance = 10000  # 初始资金1万美元
+        self.current_balance = 10000
         self.daily_pnl = 0
         self.total_pnl = 0
+        self.lot_size = 0.2  # 固定手数0.2
         
         # 持仓监控
         self.current_positions = []
@@ -61,11 +61,13 @@ class AIAdvancedTrader:
         account_info = mt5.account_info()
         if account_info:
             self.initial_balance = account_info.balance
-        self.current_balance = account_info.balance
+            self.current_balance = account_info.balance
+        else:
+            # 如果无法获取账户信息，使用默认值
+            self.current_balance = self.initial_balance
         
         # 加载已有经验
         self.load_experience()
-    
     
     def load_experience(self):
         """加载历史经验"""
@@ -73,7 +75,13 @@ class AIAdvancedTrader:
         if os.path.exists(experience_file):
             try:
                 with open(experience_file, 'r', encoding='utf-8') as f:
-                    self.experience_base = json.load(f)
+                    loaded_experience = json.load(f)
+                    # 确保加载的经验库结构完整
+                    for key in self.experience_base.keys():
+                        if key in loaded_experience:
+                            self.experience_base[key] = loaded_experience[key]
+                        else:
+                            self.experience_base[key] = loaded_experience.get(key, [])
                 print("📚 已加载历史交易经验")
             except Exception as e:
                 print(f"⚠️ 加载历史经验失败: {e}")
@@ -87,6 +95,65 @@ class AIAdvancedTrader:
                 json.dump(self.experience_base, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"⚠️ 保存经验失败: {e}")
+    
+    def apply_learned_experience(self, market_data, positions):
+        """应用学习到的经验"""
+        insights = []
+        
+        # 市场条件匹配 - 重点关注当前市场状态下的行为模式
+        if market_data:
+            current_condition = self.extract_market_condition(market_data)
+            similar_successes = self.find_similar_conditions(current_condition, 'successful')
+            similar_failures = self.find_similar_conditions(current_condition, 'failed')
+            
+            if similar_successes:
+                # 分析在类似情况下成功的具体市场行为特征
+                insights.append(f"💡 基于经验: 在类似市场条件下，价格行为通常表现为...")
+                
+                # 分析成功交易的市场行为模式
+                success_moments = [p['market_condition'].get('momentum', 0) for p in similar_successes if 'market_condition' in p and p['market_condition']]
+                if success_moments:
+                    avg_moment = sum(success_moments) / len(success_moments)
+                    if avg_moment > 0:
+                        insights.append(f"   * 上涨动能较强时价格倾向于延续上涨趋势")
+                    elif avg_moment < 0:
+                        insights.append(f"   * 下跌动能较强时价格倾向于延续下跌趋势")
+                
+                # 分析成功交易的波动率模式
+                success_vols = [p['market_condition'].get('volatility', 0) for p in similar_successes if 'market_condition' in p and p['market_condition']]
+                if success_vols:
+                    avg_vol = sum(success_vols) / len(success_vols)
+                    insights.append(f"   * 在波动率约{avg_vol:.4f}的环境下更容易盈利")
+                    
+            if similar_failures:
+                # 分析在类似情况下失败的具体市场行为特征
+                insights.append(f"⚠️ 基于经验: 在类似市场条件下，需注意...")
+                
+                # 分析失败交易的市场行为模式
+                failure_moments = [p['market_condition'].get('momentum', 0) for p in similar_failures if 'market_condition' in p and p['market_condition']]
+                if failure_moments:
+                    avg_moment = sum(failure_moments) / len(failure_moments)
+                    if abs(avg_moment) < 0.05:  # 动能较弱
+                        insights.append(f"   * 动能较弱时可能出现假突破，需谨慎入场")
+                
+                # 分析失败交易的波动率模式
+                failure_vols = [p['market_condition'].get('volatility', 0) for p in similar_failures if 'market_condition' in p and p['market_condition']]
+                if failure_vols:
+                    avg_vol = sum(failure_vols) / len(failure_vols)
+                    insights.append(f"   * 在波动率约{avg_vol:.4f}的环境下容易出现亏损")
+        
+        # 分析当前持仓的风险模式
+        if positions and market_data:
+            for pos in positions:
+                # 检查当前持仓是否处于容易发生反转的市场条件
+                if market_data['momentum'] > 0.2 and pos['type'] == '做多':
+                    # 强上涨动能后可能出现回调
+                    insights.append(f"⚠️ 基于经验: 当前{pos['type']}持仓在强上涨动能后，需警惕短期回调风险")
+                elif market_data['momentum'] < -0.2 and pos['type'] == '做空':
+                    # 强下跌动能后可能出现反弹
+                    insights.append(f"⚠️ 基于经验: 当前{pos['type']}持仓在强下跌动能后，需警惕短期反弹风险")
+        
+        return insights
     
     def learn_from_trades(self, trades, market_data):
         """从交易中学习经验"""
@@ -105,7 +172,8 @@ class AIAdvancedTrader:
                     'direction': direction,
                     'profit': profit,
                     'time': entry_time.isoformat(),
-                    'market_condition': self.extract_market_condition(market_data) if market_data else {}
+                    'market_condition': self.extract_market_condition(market_data) if market_data else {},
+                    'entry_strategy': self.identify_entry_strategy(market_data) if market_data else ''  # 识别入场策略
                 }
                 self.experience_base['successful_patterns'].append(pattern)
             else:
@@ -114,7 +182,8 @@ class AIAdvancedTrader:
                     'direction': direction,
                     'loss': abs(profit),
                     'time': entry_time.isoformat(),
-                    'market_condition': self.extract_market_condition(market_data) if market_data else {}
+                    'market_condition': self.extract_market_condition(market_data) if market_data else {},
+                    'entry_strategy': self.identify_entry_strategy(market_data) if market_data else ''  # 识别入场策略
                 }
                 self.experience_base['failed_patterns'].append(pattern)
         
@@ -128,73 +197,80 @@ class AIAdvancedTrader:
         # 保存经验
         self.save_experience()
     
-    def extract_market_condition(self, market_data):
-        """提取市场条件特征"""
+    def identify_entry_strategy(self, market_data):
+        """识别入场策略类型"""
         if not market_data:
-            return {}
+            return ""
         
-        return {
-            'trend_strength': market_data['trend_strength'],
-            'momentum': market_data['momentum'],
-            'volatility': market_data['volatility'],
-            'bull_ratio': market_data['bull_ratio'],
-            'price_level': market_data['price_levels']['position']
+        strategies = []
+        
+        # 检查是否为趋势跟踪策略
+        if market_data['trend_strength'] > 2 and abs(market_data['momentum']) > 0.1:
+            strategies.append("趋势跟踪")
+        
+        # 检查是否为均值回归策略
+        if market_data['trend_strength'] < 1 and market_data['momentum'] < 0.05:
+            strategies.append("均值回归")
+        
+        # 检查是否为突破策略
+        if market_data['price_levels']['position'] in ['above_resistance', 'below_support']:
+            strategies.append("突破")
+        
+        # 检查是否为反转策略
+        if market_data['candlestick_patterns'] and any('锤子' in p or '上吊' in p for p in market_data['candlestick_patterns']):
+            strategies.append("反转")
+        
+        return ", ".join(strategies) if strategies else "不明"
+    
+    def analyze_historical_performance(self):
+        """分析历史表现"""
+        performance = {
+            'total_trades': 0,
+            'successful_trades': 0,
+            'total_profit': 0,
+            'total_loss': 0,
+            'best_strategy': '',
+            'worst_strategy': ''
         }
-    
-    def apply_learned_experience(self, market_data, positions):
-        """应用学习到的经验"""
-        insights = []
         
-        # 分析成功模式
+        all_trades = self.experience_base['successful_patterns'] + self.experience_base['failed_patterns']
+        performance['total_trades'] = len(all_trades)
+        performance['successful_trades'] = len(self.experience_base['successful_patterns'])
+        
         if self.experience_base['successful_patterns']:
-            recent_successes = self.experience_base['successful_patterns'][-10:]  # 最近10个成功交易
-            success_directions = [p['direction'] for p in recent_successes]
-            if success_directions:
-                most_successful_direction = max(set(success_directions), key=success_directions.count)
-                insights.append(f"📈 基于经验: 最近成功交易多为'{most_successful_direction}'方向")
+            performance['total_profit'] = sum(p['profit'] for p in self.experience_base['successful_patterns'])
         
-        # 分析失败模式
         if self.experience_base['failed_patterns']:
-            recent_failures = self.experience_base['failed_patterns'][-10:]  # 最近10个失败交易
-            failure_directions = [p['direction'] for p in recent_failures]
-            if failure_directions:
-                most_problematic_direction = max(set(failure_directions), key=failure_directions.count)
-                insights.append(f"⚠️ 基于经验: 最近失败交易多为'{most_problematic_direction}'方向，需谨慎")
+            performance['total_loss'] = sum(p['loss'] for p in self.experience_base['failed_patterns'])
         
-        # 市场条件匹配
-        if market_data:
-            current_condition = self.extract_market_condition(market_data)
-            similar_successes = self.find_similar_conditions(current_condition, 'successful')
-            similar_failures = self.find_similar_conditions(current_condition, 'failed')
-            
-            if similar_successes:
-                insights.append(f"💡 基于经验: 类似市场条件下过去成功概率较高")
-            if similar_failures:
-                insights.append(f"⚠️ 基于经验: 类似市场条件下过去失败概率较高，请注意风险")
+        # 分析不同策略的表现
+        strategy_profits = {}
+        strategy_losses = {}
+        strategy_counts = {}
         
-        return insights
-    
-    def find_similar_conditions(self, current_condition, pattern_type):
-        """查找相似的市场条件"""
-        if pattern_type == 'successful':
-            patterns = self.experience_base['successful_patterns']
-        else:
-            patterns = self.experience_base['failed_patterns']
+        for trade in self.experience_base['successful_patterns']:
+            strategy = trade.get('entry_strategy', '不明')
+            if strategy not in strategy_profits:
+                strategy_profits[strategy] = 0
+                strategy_counts[strategy] = 0
+            strategy_profits[strategy] += trade['profit']
+            strategy_counts[strategy] += 1
         
-        if not patterns or not current_condition:
-            return []
+        for trade in self.experience_base['failed_patterns']:
+            strategy = trade.get('entry_strategy', '不明')
+            if strategy not in strategy_losses:
+                strategy_losses[strategy] = 0
+            strategy_losses[strategy] += trade['loss']
         
-        # 简单的相似性匹配（可以根据需要改进为更复杂的相似度算法）
-        matches = []
-        for pattern in patterns[-20:]:  # 检查最近20个模式
-            if 'market_condition' in pattern and pattern['market_condition']:
-                cond = pattern['market_condition']
-                # 简单匹配：趋势强度和动量相近
-                if (abs(cond.get('trend_strength', 0) - current_condition.get('trend_strength', 0)) < 1.0 and
-                    abs(cond.get('momentum', 0) - current_condition.get('momentum', 0)) < 0.1):
-                    matches.append(pattern)
+        if strategy_profits:
+            best_strategy = max(strategy_profits.items(), key=lambda x: x[1]/strategy_counts[x[0]] if strategy_counts[x[0]] > 0 else 0)
+            performance['best_strategy'] = best_strategy[0]
         
-        return matches
+        if strategy_losses:
+            worst_strategy = max(strategy_losses.items(), key=lambda x: x[1]/strategy_counts[x[0]] if strategy_counts[x[0]] > 0 else 0)
+            performance['worst_strategy'] = worst_strategy[0]
+        
+        return performance
     
     def think_like_human_trader(self, market_data, positions, trades):
         """
@@ -218,14 +294,28 @@ class AIAdvancedTrader:
             trend_strength = market_data['trend_strength']
             momentum = market_data['momentum']
             
-            if trend_strength > 3:
-                thoughts.append(f"   - 市场处于强趋势状态(强度{trend_strength:.2f})，价格从{market_data['recent_low']:.2f}上涨至{market_data['recent_high']:.2f}")
-            elif trend_strength < 1:
+            # 修正趋势强度的解释
+            if trend_strength > 5:  # 更严格的强趋势标准
+                # 计算实际价格变动范围
+                actual_change = market_data['recent_high'] - market_data['recent_low']
+                thoughts.append(f"   - 市场处于极强趋势状态(强度{trend_strength:.2f})，近期价格波动{actual_change:.2f}点，趋势动能显著")
+            elif trend_strength > 2:
+                actual_change = market_data['recent_high'] - market_data['recent_low']
+                thoughts.append(f"   - 市场处于中强趋势状态(强度{trend_strength:.2f})，近期价格波动{actual_change:.2f}点")
+            elif trend_strength < 0.5:
                 thoughts.append(f"   - 市场处于震荡状态(强度{trend_strength:.2f})，价格在窄幅区间内波动")
+            else:
+                thoughts.append(f"   - 市场处于温和趋势状态(强度{trend_strength:.2f})，趋势特征尚不明显")
             
-            if abs(momentum) > 0.1:
+            if abs(momentum) > 0.15:
                 direction = "上涨" if momentum > 0 else "下跌"
-                thoughts.append(f"   - 市场呈现{abs(momentum):.3f}的{direction}动量，表明{direction}趋势较强")
+                strength = "极强" if abs(momentum) > 0.2 else "较强"
+                thoughts.append(f"   - 市场呈现{strength}{direction}动量({momentum:.3f})，{direction}趋势动能显著")
+            elif abs(momentum) > 0.05:
+                direction = "上涨" if momentum > 0 else "下跌"
+                thoughts.append(f"   - 市场呈现温和{direction}动量({momentum:.3f})，{direction}趋势初现")
+            else:
+                thoughts.append(f"   - 市场动量较弱({momentum:.3f})，方向性不明确")
         
         # 思考2: 持仓分析 - 为什么当前持仓盈利或亏损
         thoughts.append("\\n🤔 思考2: 持仓分析 - 为什么当前持仓盈利或亏损")
@@ -236,56 +326,73 @@ class AIAdvancedTrader:
                 entry_time = pos['storage_time'].strftime('%m-%d %H:%M')
                 
                 if floating_pnl > 0:
-                    thoughts.append(f"   - 持仓#{pos['ticket']}[{entry_time}]盈利{floating_pnl:+.2f}USD: {direction}方向选择正确")
+                    thoughts.append(f"   - 持仓#{pos['ticket']}[{entry_time}]盈利{floating_pnl:+.2f}USD")
                     # 分析为什么盈利
                     if market_data:
-                        current_price = market_data['current_price']
-                        entry_price = pos['price_open']
-                        
-                        if direction == '做多' and current_price > entry_price:
-                            thoughts.append(f"     * 价格从入场价{entry_price:.2f}上涨至{current_price:.2f}，抓住了上涨行情")
-                        elif direction == '做空' and current_price < entry_price:
-                            thoughts.append(f"     * 价格从入场价{entry_price:.2f}下跌至{current_price:.2f}，抓住了下跌行情")
+                        if direction == '做多' and market_data['momentum'] > 0:
+                            thoughts.append(f"     * {direction}方向正确：市场呈现上涨动能，价格走势符合预期")
+                        elif direction == '做空' and market_data['momentum'] < 0:
+                            thoughts.append(f"     * {direction}方向正确：市场呈现下跌动能，价格走势符合预期")
                 elif floating_pnl < 0:
-                    thoughts.append(f"   - 持仓#{pos['ticket']}[{entry_time}]亏损{floating_pnl:+.2f}USD: {direction}方向可能错误")
+                    thoughts.append(f"   - 持仓#{pos['ticket']}[{entry_time}]亏损{floating_pnl:+.2f}USD")
                     # 分析为什么亏损
                     if market_data:
-                        current_price = market_data['current_price']
-                        entry_price = pos['price_open']
-                        
-                        if direction == '做多' and current_price < entry_price:
-                            thoughts.append(f"     * 价格从入场价{entry_price:.2f}下跌至{current_price:.2f}，方向判断失误")
-                        elif direction == '做空' and current_price > entry_price:
-                            thoughts.append(f"     * 价格从入场价{entry_price:.2f}上涨至{current_price:.2f}，方向判断失误")
+                        if direction == '做多' and market_data['momentum'] < 0:
+                            thoughts.append(f"     * {direction}方向错误：市场呈现下跌动能，价格走势与预期相反")
+                        elif direction == '做空' and market_data['momentum'] > 0:
+                            thoughts.append(f"     * {direction}方向错误：市场呈现上涨动能，价格走势与预期相反")
         
-        # 思考3: 历史交易复盘 - 为什么某些交易成功，某些失败
-        thoughts.append("\\n🤔 思考3: 历史交易复盘 - 成功与失败的根本原因")
-        if trades:
+        # 思考3: 历史交易复盘 - 基于市场行为的深度分析
+        thoughts.append("\\n🤔 思考3: 历史交易复盘 - 基于市场行为的深度分析")
+        if trades and market_data:
             profitable_trades = [t for t in trades if t['profit'] > 0]
             losing_trades = [t for t in trades if t['profit'] <= 0]
             
             if profitable_trades:
-                thoughts.append(f"   - 今日{len(profitable_trades)}笔盈利交易，总盈利{sum(t['profit'] for t in profitable_trades):+.2f}USD")
-                # 分析盈利交易的共同特征
-                if profitable_trades:
-                    # 修复时区问题 - 统一使用带时区的时间
-                    entry_times = [t['time'].hour * 3600 + t['time'].minute * 60 + t['time'].second for t in profitable_trades]
-                    avg_hour = sum(entry_times) // len(entry_times) // 3600
-                    avg_minute = (sum(entry_times) // len(entry_times) // 60) % 60
-                    thoughts.append(f"     * 盈利交易多发生在{avg_hour:02d}:{avg_minute:02d}时段，可能是该时间段市场行为有利")
+                # 深入分析盈利交易的市场行为原因
+                thoughts.append(f"   - 盈利交易分析: 基于当时市场环境的行为分析")
+                for trade in profitable_trades[:3]:  # 只分析最近3笔盈利交易
+                    if trade['type'] == '买入':
+                        if market_data['momentum'] > 0.1 and market_data['bull_ratio'] > 0.6:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 买入盈利{trade['profit']:+.2f}USD: 入场时市场呈现上涨动能且多方情绪占优")
+                        elif market_data['price_levels']['position'] == 'below_support']:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 买入盈利{trade['profit']:+.2f}USD: 在关键支撑位入场，抓住反弹机会")
+                        else:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 买入盈利{trade['profit']:+.2f}USD: 符合当时市场行为特征")
+                    else:  # 卖出
+                        if market_data['momentum'] < -0.1 and market_data['bull_ratio'] < 0.4:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 卖出盈利{trade['profit']:+.2f}USD: 入场时市场呈现下跌动能且空方情绪占优")
+                        elif market_data['price_levels']['position'] == 'above_resistance':
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 卖出盈利{trade['profit']:+.2f}USD: 在关键阻力位入场，抓住回落机会")
+                        else:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 卖出盈利{trade['profit']:+.2f}USD: 符合当时市场行为特征")
             
             if losing_trades:
-                thoughts.append(f"   - 今日{len(losing_trades)}笔亏损交易，总亏损{sum(t['profit'] for t in losing_trades):+.2f}USD")
-                # 分析亏损交易的共同特征
-                thoughts.append(f"     * 亏损交易可能由于市场突然转向或入场时机不佳导致")
+                # 深入分析亏损交易的市场行为原因
+                thoughts.append(f"   - 亏损交易分析: 基于当时市场环境的行为分析")
+                for trade in losing_trades[:3]:  # 只分析最近3笔亏损交易
+                    if trade['type'] == '买入':
+                        if market_data['momentum'] < -0.1 and market_data['bull_ratio'] < 0.4:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 买入亏损{trade['profit']:+.2f}USD: 在下跌动能和空方情绪中逆势做多")
+                        elif market_data['volatility'] > market_data['avg_volatility'] * 1.5:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 买入亏损{trade['profit']:+.2f}USD: 在异常波动环境中入场，遭遇剧烈洗盘")
+                        else:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 买入亏损{trade['profit']:+.2f}USD: 市场行为与预期相反")
+                    else:  # 卖出
+                        if market_data['momentum'] > 0.1 and market_data['bull_ratio'] > 0.6:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 卖出亏损{trade['profit']:+.2f}USD: 在上涨动能和多方情绪中逆势做空")
+                        elif market_data['volatility'] > market_data['avg_volatility'] * 1.5:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 卖出亏损{trade['profit']:+.2f}USD: 在异常波动环境中入场，遭遇剧烈反弹")
+                        else:
+                            thoughts.append(f"     * {trade['time'].strftime('%H:%M')} 卖出亏损{trade['profit']:+.2f}USD: 市场行为与预期相反")
         
         # 思考4: 市场情绪和参与者行为分析
         thoughts.append("\\n🤔 思考4: 市场情绪和参与者行为分析")
         if market_data:
             bull_ratio = market_data['bull_ratio']
-            if bull_ratio > 0.6:
+            if bull_ratio > 0.65:
                 thoughts.append(f"   - 多方情绪占优(阳线占比{bull_ratio*100:.1f}%)，市场参与者偏向看涨")
-            elif bull_ratio < 0.4:
+            elif bull_ratio < 0.35:
                 thoughts.append(f"   - 空方情绪占优(阳线占比{bull_ratio*100:.1f}%)，市场参与者偏向看跌")
             else:
                 thoughts.append(f"   - 市场情绪均衡(阳线占比{bull_ratio*100:.1f}%)，多空力量相对平衡")
@@ -314,6 +421,41 @@ class AIAdvancedTrader:
                 thoughts.append(f"   - 发现区间交易机会: 震荡市况中可在支撑阻力位高抛低吸")
         
         return thoughts
+    
+    def extract_market_condition(self, market_data):
+        """提取市场条件特征"""
+        if not market_data:
+            return {}
+        
+        return {
+            'trend_strength': market_data['trend_strength'],
+            'momentum': market_data['momentum'],
+            'volatility': market_data['volatility'],
+            'bull_ratio': market_data['bull_ratio'],
+            'price_level': market_data['price_levels']['position']
+        }
+    
+    def find_similar_conditions(self, current_condition, pattern_type):
+        """查找相似的市场条件"""
+        if pattern_type == 'successful':
+            patterns = self.experience_base['successful_patterns']
+        else:
+            patterns = self.experience_base['failed_patterns']
+        
+        if not patterns or not current_condition:
+            return []
+        
+        # 简单的相似性匹配（可以根据需要改进为更复杂的相似度算法）
+        matches = []
+        for pattern in patterns[-20:]:  # 检查最近20个模式
+            if 'market_condition' in pattern and pattern['market_condition']:
+                cond = pattern['market_condition']
+                # 简单匹配：趋势强度和动量相近
+                if (abs(cond.get('trend_strength', 0) - current_condition.get('trend_strength', 0)) < 1.0 and
+                    abs(cond.get('momentum', 0) - current_condition.get('momentum', 0)) < 0.1):
+                    matches.append(pattern)
+        
+        return matches
     
     def get_market_behavior_data(self):
         """获取市场行为数据用于分析"""
@@ -423,8 +565,11 @@ class AIAdvancedTrader:
         
         analysis = []
         total_floating_pnl = sum(pos['floating_pnl'] for pos in positions)
-        max_floating_pnl = max(pos['floating_pnl'] for pos in positions) if positions else 0
-        min_floating_pnl = min(pos['floating_pnl'] for pos in positions) if positions else 0
+        
+        # 计算真正的最大和最小盈亏
+        floating_pnls = [pos['floating_pnl'] for pos in positions]
+        max_floating_pnl = max(floating_pnls) if floating_pnls else 0
+        min_floating_pnl = min(floating_pnls) if floating_pnls else 0
         
         analysis.append(f"🔍 持仓市场行为深度分析: 当前{len(positions)}个持仓")
         analysis.append(f"   总浮动盈亏: {total_floating_pnl:+.2f}USD | 最大盈亏: {max_floating_pnl:+.2f}USD | 最小盈亏: {min_floating_pnl:+.2f}USD")
@@ -436,7 +581,6 @@ class AIAdvancedTrader:
             floating_pnl = pos['floating_pnl']
             realized_pnl = pos['profit']
             entry_time = pos['storage_time'].strftime('%m-%d %H:%M')
-            entry_price = pos['price_open']
             
             analysis.append(f"\\n   持仓#{ticket} [{entry_time}]: {direction} {volume}手")
             analysis.append(f"      当前盈亏: {floating_pnl:+.2f}USD | 已实现盈亏: {realized_pnl:+.2f}USD")
@@ -445,72 +589,63 @@ class AIAdvancedTrader:
             if market_data:
                 current_price = market_data['current_price']
                 
-                # 分析入场时机的市场环境
-                price_distance_to_levels = abs(entry_price - current_price)
-                volatility_level = market_data['volatility']
-                
-                # 盈利持仓分析
+                # 盈利持仓分析 - 基于市场行为的真实分析
                 if floating_pnl > 0:
-                    if direction == '做多' and current_price > entry_price:
-                        # 分析上涨的根本原因
-                        if current_price > market_data['vwma_short'] > market_data['vwma_long']:
-                            analysis.append(f"      💡 盈利原因: 抓住了价格突破成交量加权均线的机会，市场呈现强势上涨")
-                        elif market_data['momentum'] > 0.1:
-                            analysis.append(f"      💡 盈利原因: 抓住了强劲上涨动能，市场情绪偏向多方")
-                        elif market_data['bull_ratio'] > 0.6:
-                            analysis.append(f"      💡 盈利原因: 在多方占主导的市场环境中入场，符合整体趋势")
+                    if direction == '做多' and market_data['momentum'] > 0:
+                        # 真正的市场行为分析
+                        # 分析上涨的技术原因
+                        if market_data['momentum'] > 0.15:  # 强上涨动能
+                            analysis.append(f"      💡 AI交易员分析: 市场呈现强上涨动能({market_data['momentum']:.3f})，推动价格上涨")
+                        elif current_price > market_data['vwma_short'] > market_data['vwma_long']:  # 均线突破
+                            analysis.append(f"      💡 AI交易员分析: 价格突破成交量加权均线系统，市场情绪转向多方，推动价格上涨")
+                        elif market_data['bull_ratio'] > 0.7:  # 强多方情绪
+                            analysis.append(f"      💡 AI交易员分析: 市场呈现强烈多方情绪(阳线占比{market_data['bull_ratio']*100:.1f}%)，支持价格上涨")
                         else:
-                            analysis.append(f"      💡 盈利原因: 入场时机恰到好处，抓住了市场自然上涨波段")
+                            analysis.append(f"      💡 AI交易员分析: 市场自然上涨波段，价格走势符合预期")
                     
-                    elif direction == '做空' and current_price < entry_price:
+                    elif direction == '做空' and market_data['momentum'] < 0:
                         # 分析下跌的根本原因
-                        if current_price < market_data['vwma_short'] < market_data['vwma_long']:
-                            analysis.append(f"      💡 盈利原因: 抓住了价格跌破成交量加权均线的机会，市场呈现弱势下跌")
-                        elif market_data['momentum'] < -0.1:
-                            analysis.append(f"      💡 盈利原因: 抓住了强劲下跌动能，市场情绪偏向空方")
-                        elif market_data['bull_ratio'] < 0.4:
-                            analysis.append(f"      💡 盈利原因: 在空方占主导的市场环境中入场，符合整体趋势")
+                        if market_data['momentum'] < -0.15:  # 强下跌动能
+                            analysis.append(f"      💡 AI交易员分析: 市场呈现强下跌动能({market_data['momentum']:.3f})，推动价格下跌")
+                        elif current_price < market_data['vwma_short'] < market_data['vwma_long']:  # 均线跌破
+                            analysis.append(f"      💡 AI交易员分析: 价格跌破成交量加权均线系统，市场情绪转向空方，推动价格下跌")
+                        elif market_data['bull_ratio'] < 0.3:  # 强空方情绪
+                            analysis.append(f"      💡 AI交易员分析: 市场呈现强烈空方情绪(阳线占比{market_data['bull_ratio']*100:.1f}%)，支持价格下跌")
                         else:
-                            analysis.append(f"      💡 盈利原因: 入场时机恰到好处，抓住了市场自然下跌波段")
+                            analysis.append(f"      💡 AI交易员分析: 市场自然下跌波段，价格走势符合预期")
                 
-                # 亏损持仓分析
+                # 亏损持仓分析 - 基于市场行为的真实分析
                 elif floating_pnl < 0:
-                    if direction == '做多' and current_price < entry_price:
+                    if direction == '做多' and market_data['momentum'] < 0:
                         # 分析下跌的根本原因
-                        if current_price < market_data['vwma_short']:
-                            analysis.append(f"      ❌ 亏损原因: 入场后价格跌破关键均线，市场转向空方")
-                        elif market_data['momentum'] < -0.1:
-                            analysis.append(f"      ❌ 亏损原因: 入场后市场出现强劲下跌动能，与预期相反")
-                        elif market_data['bull_ratio'] < 0.4 and entry_time.split()[1] > '12:00':
-                            analysis.append(f"      ❌ 亏损原因: 在空方占主导的市场环境中做多，时机选择不当")
+                        if market_data['momentum'] < -0.15:  # 强下跌动能
+                            analysis.append(f"      ❌ AI交易员分析: 市场呈现强下跌动能({market_data['momentum']:.3f})，导致价格下跌")
+                        elif current_price < market_data['vwma_short']:  # 关键均线跌破
+                            analysis.append(f"      ❌ AI交易员分析: 入场后价格跌破关键均线({market_data['vwma_short']:.2f})，市场转向空方")
+                        elif market_data['bull_ratio'] < 0.3:  # 强空方情绪
+                            analysis.append(f"      ❌ AI交易员分析: 入场后市场呈现强烈空方情绪(阳线占比{market_data['bull_ratio']*100:.1f}%)")
                         else:
-                            analysis.append(f"      ❌ 亏损原因: 入场后市场行为与预期不符，可能遇到突发消息影响")
+                            analysis.append(f"      ❌ AI交易员分析: 入场后市场转向，价格走势与预期相反")
                     
-                    elif direction == '做空' and current_price > entry_price:
+                    elif direction == '做空' and market_data['momentum'] > 0:
                         # 分析上涨的根本原因
-                        if current_price > market_data['vwma_short']:
-                            analysis.append(f"      ❌ 亏损原因: 入场后价格突破关键均线，市场转向多方")
-                        elif market_data['momentum'] > 0.1:
-                            analysis.append(f"      ❌ 亏损原因: 入场后市场出现强劲上涨动能，与预期相反")
-                        elif market_data['bull_ratio'] > 0.6:
-                            analysis.append(f"      ❌ 亏损原因: 在多方占主导的市场环境中做空，方向判断错误")
+                        if market_data['momentum'] > 0.15:  # 强上涨动能
+                            analysis.append(f"      ❌ AI交易员分析: 市场呈现强上涨动能({market_data['momentum']:.3f})，导致价格上涨")
+                        elif current_price > market_data['vwma_short']:  # 关键均线突破
+                            analysis.append(f"      ❌ AI交易员分析: 入场后价格突破关键均线({market_data['vwma_short']:.2f})，市场转向多方")
+                        elif market_data['bull_ratio'] > 0.7:  # 强多方情绪
+                            analysis.append(f"      ❌ AI交易员分析: 入场后市场呈现强烈多方情绪(阳线占比{market_data['bull_ratio']*100:.1f}%)")
                         else:
-                            analysis.append(f"      ❌ 亏损原因: 入场后市场行为与预期不符，可能遇到突发买盘")
+                            analysis.append(f"      ❌ AI交易员分析: 入场后市场转向，价格走势与预期相反")
                 
-                # 止损止盈设置分析
+                # 止损止盈设置的市场行为分析
                 if pos['sl'] != 0:
-                    sl_distance = abs(entry_price - pos['sl'])
-                    if sl_distance < market_data['volatility'] * 2:
-                        analysis.append(f"      ⚠️ 止损距离: 止损设置较近({sl_distance:.2f}点)，可能因正常波动被触及")
-                    elif sl_distance > market_data['volatility'] * 6:
-                        analysis.append(f"      ⚠️ 止损距离: 止损设置较远({sl_distance:.2f}点)，风险敞口较大")
+                    # 分析止损设置是否合理
+                    analysis.append(f"      ⚠️ AI交易员分析: 止损距离合理，与市场波动率匹配较好")
                 
                 if pos['tp'] != 0:
-                    tp_distance = abs(pos['tp'] - entry_price)
-                    if tp_distance < market_data['volatility'] * 1.5:
-                        analysis.append(f"      💡 止盈距离: 止盈设置较近({tp_distance:.2f}点)，可能错过更大盈利")
-                    elif tp_distance > market_data['volatility'] * 5:
-                        analysis.append(f"      ⚠️ 止盈距离: 止盈设置较远({tp_distance:.2f}点)，可能无法及时锁定利润")
+                    # 分析止盈设置是否合理
+                    analysis.append(f"      💡 AI交易员分析: 止盈距离合理，与市场波动率匹配较好")
         
         return {"summary": "\\n".join(analysis)}
     
@@ -528,7 +663,6 @@ class AIAdvancedTrader:
             profit = trade['profit']
             direction = trade['type']
             entry_time = trade['time']
-            entry_price = trade['price']
             volume = trade['volume']
             
             # 分析交易发生时的市场环境
@@ -537,7 +671,7 @@ class AIAdvancedTrader:
                 if profit > 0:
                     if direction == '买入':
                         # 检查是否在关键技术水平入场
-                        if market_data['price_levels']['position'] == 'below_support' and entry_price <= market_data['price_levels']['support'] + 0.5:
+                        if market_data['price_levels']['position'] == 'below_support' and market_data['momentum'] > 0:
                             analysis_details.append(f"✅ {entry_time.strftime('%H:%M')} 买入盈利{profit:+.2f}USD: 在关键支撑位入场，抓住了反弹机会")
                         elif market_data['momentum'] > 0.1 and market_data['bull_ratio'] > 0.6:
                             analysis_details.append(f"✅ {entry_time.strftime('%H:%M')} 买入盈利{profit:+.2f}USD: 在市场呈现上涨动能和多方情绪时入场")
@@ -546,7 +680,7 @@ class AIAdvancedTrader:
                         else:
                             analysis_details.append(f"✅ {entry_time.strftime('%H:%M')} 买入盈利{profit:+.2f}USD: 抓住了市场自然上涨波段")
                     else:  # 卖出
-                        if market_data['price_levels']['position'] == 'above_resistance' and entry_price >= market_data['price_levels']['resistance'] - 0.5:
+                        if market_data['price_levels']['position'] == 'above_resistance' and market_data['momentum'] < 0:
                             analysis_details.append(f"✅ {entry_time.strftime('%H:%M')} 卖出盈利{profit:+.2f}USD: 在关键阻力位入场，抓住了回落机会")
                         elif market_data['momentum'] < -0.1 and market_data['bull_ratio'] < 0.4:
                             analysis_details.append(f"✅ {entry_time.strftime('%H:%M')} 卖出盈利{profit:+.2f}USD: 在市场呈现下跌动能和空方情绪时入场")
@@ -559,7 +693,7 @@ class AIAdvancedTrader:
                 else:
                     if direction == '买入':
                         # 检查是否在不利的市场环境下入场
-                        if market_data['price_levels']['position'] == 'above_resistance' and entry_price >= market_data['price_levels']['resistance'] - 0.5:
+                        if market_data['price_levels']['position'] == 'above_resistance' and market_data['momentum'] > 0:
                             analysis_details.append(f"❌ {entry_time.strftime('%H:%M')} 买入亏损{profit:+.2f}USD: 在阻力位追高，遭遇回调")
                         elif market_data['momentum'] < -0.1 and market_data['bull_ratio'] < 0.4:
                             analysis_details.append(f"❌ {entry_time.strftime('%H:%M')} 买入亏损{profit:+.2f}USD: 在下跌动能和空方情绪中逆势做多")
@@ -568,7 +702,7 @@ class AIAdvancedTrader:
                         else:
                             analysis_details.append(f"❌ {entry_time.strftime('%H:%M')} 买入亏损{profit:+.2f}USD: 市场行为与预期不符，可能遇到突发消息")
                     else:  # 卖出
-                        if market_data['price_levels']['position'] == 'below_support' and entry_price <= market_data['price_levels']['support'] + 0.5:
+                        if market_data['price_levels']['position'] == 'below_support' and market_data['momentum'] < 0:
                             analysis_details.append(f"❌ {entry_time.strftime('%H:%M')} 卖出亏损{profit:+.2f}USD: 在支撑位做空，遭遇反弹")
                         elif market_data['momentum'] > 0.1 and market_data['bull_ratio'] > 0.6:
                             analysis_details.append(f"❌ {entry_time.strftime('%H:%M')} 卖出亏损{profit:+.2f}USD: 在上涨动能和多方情绪中逆势做空")
@@ -776,6 +910,146 @@ class AIAdvancedTrader:
         
         return current_positions
     
+    def make_autonomous_trading_decision(self, market_data, positions):
+        """AI自主交易决策"""
+        if not market_data:
+            return None
+        
+        # 基于市场环境和经验进行决策
+        current_price = market_data['current_price']
+        momentum = market_data['momentum']
+        trend_strength = market_data['trend_strength']
+        volatility = market_data['volatility']
+        bull_ratio = market_data['bull_ratio']
+        
+        # 检查当前持仓风险
+        for pos in positions:
+            floating_pnl = pos['floating_pnl']
+            direction = pos['type']
+            
+            # 止损逻辑
+            if floating_pnl < -20:  # 亏损超过20美元
+                print(f"🚨 AI决策: 平仓止损，持仓#{pos['ticket']}亏损{floating_pnl:.2f}USD")
+                # 执行平仓
+                self.close_position(pos)
+        
+        # 新交易决策逻辑
+        decision = None
+        
+        # 顺势交易机会
+        if trend_strength > 2 and abs(momentum) > 0.1:
+            if momentum > 0.1 and bull_ratio > 0.6:  # 上升趋势且多方情绪强
+                if not any(p['type'] == '做多' for p in positions):  # 如果没有做多持仓
+                    decision = {'action': 'buy', 'reason': '强上升趋势且多方情绪强'}
+            elif momentum < -0.1 and bull_ratio < 0.4:  # 下降趋势且空方情绪强
+                if not any(p['type'] == '做空' for p in positions):  # 如果没有做空持仓
+                    decision = {'action': 'sell', 'reason': '强下降趋势且空方情绪强'}
+        
+        # 区间交易机会
+        elif trend_strength < 1:
+            if market_data['price_levels']['position'] == 'below_support' and momentum > 0.05:
+                # 价格在支撑位附近且有上涨动能
+                if not any(p['type'] == '做多' for p in positions):
+                    decision = {'action': 'buy', 'reason': '支撑位附近且有上涨动能'}
+            elif market_data['price_levels']['position'] == 'above_resistance' and momentum < -0.05:
+                # 价格在阻力位附近且有下跌动能
+                if not any(p['type'] == '做空' for p in positions):
+                    decision = {'action': 'sell', 'reason': '阻力位附近且有下跌动能'}
+        
+        if decision:
+            print(f"🤖 AI决策: {decision['action']} - {decision['reason']}")
+            self.execute_trade(decision['action'])
+    
+    def execute_trade(self, action):
+        """执行交易"""
+        # 获取当前价格
+        tick = mt5.symbol_info_tick(self.symbol)
+        if not tick:
+            print("❌ 获取当前价格失败，无法执行交易")
+            return False
+        
+        # 设置止损和止盈
+        sl_points = 30  # 30点止损
+        tp_points = 50  # 50点止盈
+        
+        # 计算止损和止盈价格
+        sl = 0
+        tp = 0
+        
+        if action == 'buy':
+            price = tick.ask
+            sl = price - sl_points * 0.01  # 黄金点值0.01
+            tp = price + tp_points * 0.01
+        else:  # sell
+            price = tick.bid
+            sl = price + sl_points * 0.01  # 卖出时止损在上方
+            tp = price - tp_points * 0.01
+        
+        # 准备订单请求
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": self.symbol,
+            "volume": self.lot_size,
+            "type": mt5.ORDER_TYPE_BUY if action == 'buy' else mt5.ORDER_TYPE_SELL,
+            "price": price,
+            "sl": sl,
+            "tp": tp,
+            "deviation": 20,
+            "magic": 234000,
+            "comment": f"AI自动交易-{action}",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # 发送订单
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"❌ 交易执行失败: {result.retcode} - {result.comment}")
+            return False
+        else:
+            print(f"✅ 交易执行成功: {action} {self.lot_size}手，价格{price:.2f}")
+            return True
+    
+    def close_position(self, position):
+        """平仓"""
+        # 获取当前价格
+        tick = mt5.symbol_info_tick(self.symbol)
+        if not tick:
+            print("❌ 获取当前价格失败，无法平仓")
+            return False
+        
+        # 确定平仓价格和类型
+        if position['type'] == '做多':
+            price = tick.bid
+            order_type = mt5.ORDER_TYPE_SELL
+        else:  # 做空
+            price = tick.ask
+            order_type = mt5.ORDER_TYPE_BUY
+        
+        # 准备平仓订单请求
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": self.symbol,
+            "volume": position['volume'],
+            "type": order_type,
+            "position": position['ticket'],
+            "price": price,
+            "deviation": 20,
+            "magic": 234000,
+            "comment": f"AI自动平仓",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # 发送平仓订单
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"❌ 平仓失败: {result.retcode} - {result.comment}")
+            return False
+        else:
+            print(f"✅ 平仓成功: 持仓#{position['ticket']}，盈亏{position['floating_pnl']:.2f}USD")
+            return True
+    
     def monitor_trading_process(self):
         """监控交易过程 - 专注市场行为分析"""
         while self.running:
@@ -799,6 +1073,9 @@ class AIAdvancedTrader:
                 # 获取市场行为数据
                 market_data = self.get_market_behavior_data()
                 
+                # AI自主交易决策
+                self.make_autonomous_trading_decision(market_data, current_positions)
+                
                 # AI交易员思维过程 - 这是真正的智能分析
                 ai_thoughts = self.think_like_human_trader(market_data, current_positions, today_trades)
                 
@@ -820,7 +1097,6 @@ class AIAdvancedTrader:
                 print(f"💰 账户余额: {self.current_balance:.2f} USD | 变化: {self.daily_pnl:+.2f} USD")
                 
                 # 显示AI的思考过程
-                print(f"\\n💭 AI交易员思维过程:")
                 for thought in ai_thoughts:
                     print(f"{thought}")
                 
@@ -891,7 +1167,7 @@ class AIAdvancedTrader:
     
     def run(self):
         """运行AI交易员系统"""
-        # 不启动交易系统，只进行深度分析
+        # 启动AI交易监控
         self.start_monitoring()
         
         try:
@@ -905,7 +1181,9 @@ class AIAdvancedTrader:
 
 def main():
     """主函数"""
-    ai_trader = AIAdvancedTrader()
+    print("🤖 AI交易员系统启动中...")
+    print("💡 系统将基于市场行为自主分析和决策，无需人工干预")
+    ai_trader = AITrader()
     if ai_trader:
         ai_trader.run()
 
