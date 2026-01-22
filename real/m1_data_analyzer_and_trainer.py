@@ -33,6 +33,7 @@ STOP_LOSS_RATIO = 0.5  # 止损幅度=预测幅度的50%（风控）
 MIN_TREND_DURATION = 5  # 最小持仓时长（分钟），避免太短的无效信号
 MAX_TREND_DURATION = 120  # 最大持仓时长（分钟），避免持仓过久
 RISK_REWARD_RATIO = 2  # 风险收益比≥2（止盈/止损≥2，符合交易风控）
+CONTINUATION_THRESHOLD = 2  # 延续次数阈值，大于等于此值才会触发趋势调整
 
 # 配置日志
 log_dir = Path("trading_logs")
@@ -54,7 +55,16 @@ class M1DataAnalyzerAndTrainer:
     """M1数据趋势分析与AI模型训练一体化类"""
     
     def __init__(self):
-
+        # 模型保存目录 - 必须首先初始化，因为load_continuation_state会使用它
+        self.model_dir = "trading_ai_models"
+        os.makedirs(self.model_dir, exist_ok=True)
+        
+        # 初始化延续次数相关变量
+        self.previous_direction = None
+        self.continuation_count = 0
+        
+        # 从持久化存储加载延续次数状态
+        self.load_continuation_state()
         
         # 创建输出目录
         self.output_dir = "m1_trend_analysis_results"
@@ -81,10 +91,6 @@ class M1DataAnalyzerAndTrainer:
 
         # 交易信号存储
         self.trading_signals = []
-        
-        # 模型保存目录
-        self.model_dir = "trading_ai_models"
-        os.makedirs(self.model_dir, exist_ok=True)
         
         # 在初始化时也清理旧的模型文件
         self._cleanup_old_model_files()
@@ -1271,11 +1277,11 @@ class M1DataAnalyzerAndTrainer:
 
     def get_short_term_trend(self, num_candles=5):
         """
-        基于N根M1均线 + 连续3根K线站上/跌破均线 判断短期趋势
+        基于N根M1均线判断短期趋势，优化版：适合检测短期回调和趋势变化
         :param num_candles: 均线周期（默认5，即5M均线）
-        :return: 1 上涨趋势（连续3根站上均线），0 下跌趋势（连续3根跌破均线），-1 横盘
+        :return: 1 上涨趋势，0 下跌趋势，-1 横盘
         """
-        # 初始化MT5连接（优化：避免重复初始化/关闭，建议移到类的__init__）
+        # 初始化MT5连接
         if not mt5.initialize():
             print(f"❌ MT5初始化失败: {mt5.last_error()}")
             return -1  # 返回横盘状态
@@ -1288,9 +1294,8 @@ class M1DataAnalyzerAndTrainer:
             mt5.shutdown()
             return -1
 
-        # 获取数据：需要 均线周期 + 3 根K线（均线周期根算均线，3根用于判断连续站上/跌破）
-        # 例如5均线 → 取5+3=8根，rates[0]最旧，rates[-1]最新
-        need_rates = num_candles + 3
+        # 获取适量的数据，重点关注近期变化
+        need_rates = max(num_candles * 2 + 10, 20)  # 获取2个周期+额外数据，共20根
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, need_rates)
 
         if rates is None or len(rates) < need_rates:
@@ -1301,38 +1306,58 @@ class M1DataAnalyzerAndTrainer:
         # 提取收盘价数组
         closes = np.array([rate['close'] for rate in rates])
 
-        # 1. 计算最新的均线值（基于最近num_candles根K线的收盘价）
-        # 注意：取最新的num_candles根算均线，而非最旧的（修复原代码方向错误）
-        latest_ma = np.mean(closes[-num_candles:])
-
-        # 2. 提取最新的3根K线收盘价（用于判断连续站上/跌破）
-        latest_3_closes = closes[-3:]  # 倒数第3、2、1根（最新的3根）
-
-        # 3. 判断每根是否站上/跌破均线
-        # 定义：收盘价 > 均线 → 站上（1）；收盘价 < 均线 → 跌破（0）；相等（-1）
-        def judge_ma_relation(close, ma):
-            if close > ma:
-                return 1  # 站上均线
-            elif close < ma:
-                return 0  # 跌破均线
-            else:
-                return -1  # 持平
-
-        # 计算最新3根K线与均线的关系
-        ma_relations = [judge_ma_relation(close, latest_ma) for close in latest_3_closes]
-
-        # 4. 趋势判定：连续3根一致才判定趋势
-        if all(rel == 1 for rel in ma_relations):
-            # 连续3根都站上均线 → 上涨趋势
-            trend = 1
-        elif all(rel == 0 for rel in ma_relations):
-            # 连续3根都跌破均线 → 下跌趋势
-            trend = 0
+        # 使用更短周期对比，更快响应短期变化
+        recent_3 = closes[:3]      # 最近3根K线
+        previous_3 = closes[3:6]   # 之前3根K线
+        
+        recent_ma = np.mean(recent_3)
+        previous_ma = np.mean(previous_3)
+        
+        # 计算短期价格变化率
+        change_rate = (recent_ma - previous_ma) / previous_ma
+        
+        # 设置较小的阈值以检测短期变化
+        threshold = 0.0002  # 0.02%的阈值
+        
+        # 主要判断逻辑：短期均值变化
+        if change_rate > threshold:
+            trend = 1  # 上涨趋势
+        elif change_rate < -threshold:
+            trend = 0  # 下跌趋势
         else:
-            # 不是连续3根一致 → 横盘
-            trend = -1
+            # 使用价格动量判断短期趋势
+            # 比较最近价格与稍早价格
+            if len(closes) >= 6:
+                # 检查最近1根 vs 3根前的价格
+                latest_price = closes[0]
+                price_3_bars_ago = closes[3]
+                
+                mom_change = (latest_price - price_3_bars_ago) / price_3_bars_ago
+                
+                if mom_change > threshold:
+                    trend = 1
+                elif mom_change < -threshold:
+                    trend = 0
+                else:
+                    # 再次检查最近几根K线的高低点变化
+                    if len(closes) >= 5:
+                        highest_recent = max(closes[:3])
+                        lowest_recent = min(closes[:3])
+                        highest_prev = max(closes[3:6])
+                        lowest_prev = min(closes[3:6])
+                        
+                        # 如果最近高点比之前高点高，且最近低点比之前低点高，则为上涨
+                        if highest_recent > highest_prev and lowest_recent >= lowest_prev:
+                            trend = 1
+                        # 如果最近低点比之前低点低，且最近高点比之前高点低，则为下跌
+                        elif lowest_recent < lowest_prev and highest_recent <= highest_prev:
+                            trend = 0
+                        else:
+                            trend = -1  # 横盘
+                    else:
+                        trend = -1  # 横盘
 
-        # 断开MT5连接（优化：建议移到程序结束时统一关闭，而非每次调用）
+        # 断开MT5连接
         mt5.shutdown()
 
         return trend
@@ -1340,7 +1365,7 @@ class M1DataAnalyzerAndTrainer:
     def generate_trading_signals(self):
         """生成可直接下单的实战交易信号"""
         print(
-            f"{'开仓时间':<15} {'原方向':<8} {'实际方向':<10}  {'反转概率':<10} {'止盈幅度':<10} {'止损幅度':<10} {'置信度':<8} {'交易时段':<8}")
+            f"{'开仓时间':<15} {'原方向':<8} {'实际方向':<10}  {'预测短趋':<6} {'延续次数':<10} {'反转概率':<8} {'止盈幅度':<10} {'止损幅度':<10} {'置信度':<8} {'交易时段':<8}")
 
         # 获取最新的M1数据时间
         latest_m1_time = self.get_latest_m1_time()
@@ -1515,38 +1540,162 @@ class M1DataAnalyzerAndTrainer:
         short_term_trend = self.get_short_term_trend()
         print(f"短期趋势：{short_term_trend}")
 
-        trend_conflict = (trend_pred == 0 and short_term_trend == 1) or (trend_pred == 1 and short_term_trend == 0) and short_term_trend != -1
+        # 当短期趋势为-1（横盘）时，不强制改变AI预测的方向
+        # 只有当短期趋势为明确的上涨(1)或下跌(0)且与AI预测冲突时才调整
+        trend_conflict = (trend_pred == 0 and short_term_trend == 1) or (trend_pred == 1 and short_term_trend == 0)
 
-        # 如果AI预测方向与短期趋势一致，则使用AI预测方向
-        if not trend_conflict:
-            signal_valid = True
-        else:
-            # 如果AI预测方向与短期趋势冲突，以短期趋势为准
-            print(f"⚠️  AI预测方向与短期趋势冲突，采用短期趋势方向")
-            # 修改预测方向为短期趋势方向
-            trend_pred = short_term_trend
-            signal_valid = True
-
-        # 5. 格式化输出
+        # 初始化显示字符串
+        actual_trend_str_display = ""
         original_trend_str = "做多" if original_trend_pred == 1 else "做空"
         actual_trend_str = "做多" if trend_pred == 1 else "做空"
+
+        # 保存最终调整前的预测值，用于与原方向比较
+        final_trend_pred = trend_pred
         
-        # 如果方向被反转，添加特殊标记
-        # 只有在实际发生了方向反转时才标记
-        if original_trend_pred != trend_pred:
-            actual_trend_str_display = f"{actual_trend_str}(已根据短期趋势调整)"
+        # 如果AI预测方向与短期趋势冲突（且短期趋势不是横盘），以短期趋势为准
+        if trend_conflict and short_term_trend != -1:
+            # 修改预测方向为短期趋势方向
+            final_trend_pred = short_term_trend
         else:
+            # 没有冲突，使用AI预测方向
+            final_trend_pred = trend_pred
+            
+        signal_valid = True
+        
+        # 检查AI预测方向是否与原方向不同
+        ai_direction_changed = (original_trend_pred != trend_pred)
+        
+        # 如果AI预测方向与短期趋势冲突（且短期趋势不是横盘），以短期趋势为准
+        if trend_conflict and short_term_trend != -1:
+            final_trend_pred = short_term_trend
+        else:
+            final_trend_pred = trend_pred
+        
+        # 检查最终预测方向是否与原方向不同
+        final_direction_changed = (original_trend_pred != final_trend_pred)
+        
+        if final_direction_changed:
+            # 发生了方向变化
+            if hasattr(self, 'previous_direction_was_changed') and self.previous_direction_was_changed:
+                # 这是连续第二次方向变化，真正改变方向
+                actual_trend_str = "做多" if final_trend_pred == 1 else "做空"
+                # 不立即设置趋势调整标记，因为后续还会有新的逻辑处理
+                actual_trend_str_display = f"{actual_trend_str}(已根据短期趋势调整)"
+                final_execution_direction = final_trend_pred  # 实际执行新方向
+                self.previous_direction_was_changed = False  # 重置状态
+            else:
+                # 这是第一次方向变化，保持原方向，但标记为趋势调整中
+                actual_trend_str = "做多" if original_trend_pred == 1 else "做空"
+                # 不立即设置趋势调整标记，因为后续还会有新的逻辑处理
+                actual_trend_str_display = f"{actual_trend_str}(趋势调整中)"
+                final_execution_direction = original_trend_pred  # 保持原方向
+                self.previous_direction_was_changed = True  # 记录这次方向变化
+        else:
+            # 没有方向变化
+            actual_trend_str = "做多" if final_trend_pred == 1 else "做空"
             actual_trend_str_display = actual_trend_str
+            final_execution_direction = final_trend_pred
+            self.previous_direction_was_changed = False  # 没有变化，重置状态
+        
+        # 预测短期趋势文字显示
+        if short_term_trend == 1:
+            forecast_short_term_str = "上涨"
+        elif short_term_trend == 0:
+            forecast_short_term_str = "下跌"
+        else:
+            forecast_short_term_str = "横盘"
+        
+        # 计算延续次数
+        if not hasattr(self, 'previous_direction'):
+            self.previous_direction = None
+        if not hasattr(self, 'continuation_count'):
+            self.continuation_count = 0
+            
+        # 根据当前预测的短期趋势更新延续次数
+        current_short_trend = short_term_trend  # 1=上涨, 0=下跌, -1=横盘
+        if current_short_trend == -1:  # 横盘
+            self.continuation_count = 0
+        elif self.previous_direction is not None and self.previous_direction == current_short_trend:
+            # 方向延续，增加计数
+            self.continuation_count += 1
+        else:
+            # 方向改变或首次记录，重置计数为1
+            self.continuation_count = 1
+            
+        self.previous_direction = current_short_trend
+        
+        # 构建延续次数显示字符串 - 只保留数字部分
+        if current_short_trend == -1:
+            continuation_str = f"{0}"
+        elif current_short_trend == 1:
+            continuation_str = f"{self.continuation_count}"
+        else:  # current_short_trend == 0
+            continuation_str = f"{self.continuation_count}"
+        
+        # 根据用户要求修改第三列显示逻辑
+        # 如果第二列（original_trend_str）和第四列（forecast_short_term_str）一样，第三列不变
+        # 如果第二列和第四列不一样:
+        # - 如果第五列（continuation_str）数字>=2，且第四列是上涨，则第三列是做多
+        # - 如果第五列（continuation_str）数字>=2，且第四列是下跌，则第三列是做空
+        # - 如果第五列是横盘（数字为0），则第三列使用第二列的方向
+        
+        # 初始化最终显示方向
+        final_actual_trend_str_display = actual_trend_str_display
+        
+        # 判断第二列和第四列是否相同
+        trend_match = False
+        if original_trend_str == "做多" and forecast_short_term_str in ["上涨"]:
+            trend_match = True
+        elif original_trend_str == "做空" and forecast_short_term_str in ["下跌"]:
+            trend_match = True
+        elif original_trend_str in ["做多", "做空"] and forecast_short_term_str == "横盘":
+            # 如果第四列是横盘，按要求使用第二列方向
+            trend_match = True
+        
+        if trend_match:
+            # 第二列和第四列一样，第三列保持原值（去除趋势调整标记，只保留基础方向）
+            if "(趋势调整中)" in actual_trend_str_display:
+                final_actual_trend_str_display = "做多" if original_trend_pred == 1 else "做空"
+            elif "(已根据短期趋势调整)" in actual_trend_str_display:
+                final_actual_trend_str_display = "做多" if final_trend_pred == 1 else "做空"
+            else:
+                final_actual_trend_str_display = actual_trend_str_display
+        else:
+            # 第二列和第四列不一样
+            continuation_num = int(continuation_str) if continuation_str.isdigit() else 0
+            if continuation_num >= CONTINUATION_THRESHOLD:
+                if forecast_short_term_str == "上涨":
+                    final_actual_trend_str_display = "做多"
+                elif forecast_short_term_str == "下跌":
+                    final_actual_trend_str_display = "做空"
+                else:
+                    # 如果是横盘但延续次数>=阈值，仍然按原方向
+                    final_actual_trend_str_display = actual_trend_str_display
+            elif continuation_num == 0 and forecast_short_term_str == "横盘":
+                # 如果第五列是横盘（数字为0），则第三列使用第二列的方向
+                final_actual_trend_str_display = original_trend_str
+            else:
+                # 其他情况使用第二列（原方向）的值（去除趋势调整标记）
+                final_actual_trend_str_display = original_trend_str
         
         valid_str = "✅ 有效" if signal_valid else "❌ 无效"
         open_time_str = open_time.strftime("%Y-%m-%d %H:%M") if pd.notna(open_time) else "未知"
 
         # 保存交易信号
+        # 使用最终显示方向作为执行方向，确保显示和执行一致
+        # 解析最终显示方向来确定执行方向
+        if "做多" in final_actual_trend_str_display:
+            actual_direction_for_storage = "做多"
+            final_execution_direction_for_storage = 1
+        else:  # "做空" in final_actual_trend_str_display
+            actual_direction_for_storage = "做空"
+            final_execution_direction_for_storage = 0
+        
         self.trading_signals.append({
             "开仓时间": open_time_str,
             "平仓时间": close_time.strftime("%Y-%m-%d %H:%M") if pd.notna(close_time) else "未知",
             "原方向": original_trend_str,
-            "实际方向": actual_trend_str,
+            "实际方向": actual_direction_for_storage,
             "持仓时长(分钟)": round(duration_pred, 0),
             "趋势反转概率(%)": round(reversal_prob, 1),
             # 根据用户偏好，不显示入场价格信息
@@ -1560,16 +1709,18 @@ class M1DataAnalyzerAndTrainer:
         })
 
         # 打印单条信号（实战中可输出多条）
-        signal_str = f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
+        signal_str = f"{open_time_str:<20} {original_trend_str:<8} {final_actual_trend_str_display:<12} {forecast_short_term_str:<6} {continuation_str:<10} {round(reversal_prob, 1):<10} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
         print(signal_str)
         
         # 记录交易信号到日志文件，格式与控制台输出一致，不包含时间戳
-        log_signal_str = f"{open_time_str:<20} {original_trend_str:<8} {actual_trend_str_display:<12} {round(reversal_prob, 1):<12} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
+        log_signal_str = f"{open_time_str:<20} {original_trend_str:<8} {final_actual_trend_str_display:<12} {forecast_short_term_str:<6} {continuation_str:<10} {round(reversal_prob, 1):<10} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
         
         # 将信号直接写入日志文件，不包含时间戳和其他信息
         with open(log_dir / f"trading_signals_{datetime.now().strftime('%Y%m%d')}.log", "a", encoding="utf-8") as f:
             f.write(log_signal_str + "\n")
 
+        # 保存延续次数状态到文件
+        self.save_continuation_state()
 
         # 获取最后一条数据的特征值，分析关键突破特征
         raw_last_data = self.raw_data.iloc[-1]
@@ -1697,6 +1848,44 @@ class M1DataAnalyzerAndTrainer:
 
         # 返回最新生成的信号
         return self.trading_signals[-1] if self.trading_signals else None
+
+    def load_continuation_state(self):
+        """加载延续状态"""
+        import json
+        import os
+        
+        state_file = os.path.join(self.model_dir, 'continuation_state.json')
+        try:
+            if os.path.exists(state_file):
+                with open(state_file, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                    self.previous_direction = state.get('previous_direction', None)
+                    self.continuation_count = state.get('continuation_count', 0)
+            else:
+                # 如果状态文件不存在，初始化状态
+                self.previous_direction = None
+                self.continuation_count = 0
+        except Exception as e:
+            logger.error(f"加载延续状态失败: {e}")
+            # 出错时初始化状态
+            self.previous_direction = None
+            self.continuation_count = 0
+    
+    def save_continuation_state(self):
+        """保存延续状态"""
+        import json
+        import os
+        
+        state_file = os.path.join(self.model_dir, 'continuation_state.json')
+        try:
+            state = {
+                'previous_direction': self.previous_direction,
+                'continuation_count': self.continuation_count
+            }
+            with open(state_file, 'w', encoding='utf-8') as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存延续状态失败: {e}")
 
     def run_full_analysis_and_training(self, days_back=60):
         """运行完整的分析和训练流程"""
