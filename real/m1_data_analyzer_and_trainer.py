@@ -1273,18 +1273,16 @@ class M1DataAnalyzerAndTrainer:
         
         return latest_time
 
-
-
     def get_short_term_trend(self, num_candles=5):
         """
-        基于N根M1均线判断短期趋势，优化版：适合检测短期回调和趋势变化
-        :param num_candles: 均线周期（默认5，即5M均线）
+        基于5根K线平均值判断短期趋势：专注捕捉几分钟内的实时方向
+        :param num_candles: 参考周期（默认5，用于计算短期均线）
         :return: 1 上涨趋势，0 下跌趋势，-1 横盘
         """
         # 初始化MT5连接
         if not mt5.initialize():
             print(f"❌ MT5初始化失败: {mt5.last_error()}")
-            return -1  # 返回横盘状态
+            return -1
 
         # 检查交易品种
         symbol = "XAUUSD"
@@ -1294,72 +1292,43 @@ class M1DataAnalyzerAndTrainer:
             mt5.shutdown()
             return -1
 
-        # 获取适量的数据，重点关注近期变化
-        need_rates = max(num_candles * 2 + 10, 20)  # 获取2个周期+额外数据，共20根
+        # 获取M1数据：只需要5根K线的数据
+        need_rates = num_candles
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, need_rates)
 
-        if rates is None or len(rates) < need_rates:
-            print(f"⚠️  未获取到足够的M1数据({need_rates}根)，实际获取{len(rates) if rates is not None else 0}根")
+        if rates is None or len(rates) < num_candles:
+            print(f"⚠️ 未获取到足够的M1数据，需要至少{num_candles}根，实际{len(rates) if rates is not None else 0}根")
             mt5.shutdown()
             return -1
 
-        # 提取收盘价数组
+        # 提取价格数据
         closes = np.array([rate['close'] for rate in rates])
 
-        # 使用更短周期对比，更快响应短期变化
-        recent_3 = closes[:3]      # 最近3根K线
-        previous_3 = closes[3:6]   # 之前3根K线
-        
-        recent_ma = np.mean(recent_3)
-        previous_ma = np.mean(previous_3)
-        
-        # 计算短期价格变化率
-        change_rate = (recent_ma - previous_ma) / previous_ma
-        
-        # 设置较小的阈值以检测短期变化
-        threshold = 0.0002  # 0.02%的阈值
-        
-        # 主要判断逻辑：短期均值变化
-        if change_rate > threshold:
-            trend = 1  # 上涨趋势
-        elif change_rate < -threshold:
-            trend = 0  # 下跌趋势
+        # 计算5根K线的平均收盘价
+        avg_price = np.mean(closes)
+
+        # 获取最新3根K线的价格
+        latest_3_prices = closes[-3:]
+
+        # 计算最新3根K线的平均价格
+        latest_3_avg = np.mean(latest_3_prices)
+
+        # 判断趋势：比较最新3根的平均价格与5根的平均价格
+        diff = latest_3_avg - avg_price
+
+        # 计算动态阈值，基于5根K线的标准差
+        std_dev = np.std(closes)
+        threshold = std_dev * 0.3  # 使用标准差的30%作为阈值
+
+        if diff > threshold:
+            trend = 1  # 上涨趋势：最新3根平均价格显著高于5根平均价格
+        elif diff < -threshold:
+            trend = 0  # 下跌趋势：最新3根平均价格显著低于5根平均价格
         else:
-            # 使用价格动量判断短期趋势
-            # 比较最近价格与稍早价格
-            if len(closes) >= 6:
-                # 检查最近1根 vs 3根前的价格
-                latest_price = closes[0]
-                price_3_bars_ago = closes[3]
-                
-                mom_change = (latest_price - price_3_bars_ago) / price_3_bars_ago
-                
-                if mom_change > threshold:
-                    trend = 1
-                elif mom_change < -threshold:
-                    trend = 0
-                else:
-                    # 再次检查最近几根K线的高低点变化
-                    if len(closes) >= 5:
-                        highest_recent = max(closes[:3])
-                        lowest_recent = min(closes[:3])
-                        highest_prev = max(closes[3:6])
-                        lowest_prev = min(closes[3:6])
-                        
-                        # 如果最近高点比之前高点高，且最近低点比之前低点高，则为上涨
-                        if highest_recent > highest_prev and lowest_recent >= lowest_prev:
-                            trend = 1
-                        # 如果最近低点比之前低点低，且最近高点比之前高点低，则为下跌
-                        elif lowest_recent < lowest_prev and highest_recent <= highest_prev:
-                            trend = 0
-                        else:
-                            trend = -1  # 横盘
-                    else:
-                        trend = -1  # 横盘
+            trend = -1  # 横盘：最新3根平均价格接近5根平均价格
 
         # 断开MT5连接
         mt5.shutdown()
-
         return trend
 
     def generate_trading_signals(self):
@@ -1610,6 +1579,10 @@ class M1DataAnalyzerAndTrainer:
             self.previous_direction = None
         if not hasattr(self, 'continuation_count'):
             self.continuation_count = 0
+        
+        # 添加上次实际方向的跟踪
+        if not hasattr(self, 'last_actual_direction'):
+            self.last_actual_direction = None
             
         # 根据当前预测的短期趋势更新延续次数
         current_short_trend = short_term_trend  # 1=上涨, 0=下跌, -1=横盘
@@ -1632,12 +1605,38 @@ class M1DataAnalyzerAndTrainer:
         else:  # current_short_trend == 0
             continuation_str = f"{self.continuation_count}"
         
+        # 判断市场形态
+        market_morphology = ""  # 初始化市场形态
+        volatility = raw_last_data.get('volatility', 0)
+        bb_position = raw_last_data.get('bb_position', 0.5)
+        rsi_value = raw_last_data.get('rsi', 50)
+        
+        # 根据布林带位置和波动率判断市场形态
+        if 0.4 <= bb_position <= 0.6 and volatility < 0.001:  # 在布林带中轨附近且波动率低
+            market_morphology = "震荡"
+        elif (bb_position > 0.8 or bb_position < 0.2) and volatility > 0.002:  # 在布林带边界且波动率高
+            market_morphology = "趋势"
+        elif 0.6 < bb_position < 0.8 and volatility > 0.0015:  # 在布林带上半部分且有一定波动
+            market_morphology = "偏多"
+        elif 0.2 < bb_position < 0.4 and volatility > 0.0015:  # 在布林带下半部分且有一定波动
+            market_morphology = "偏空"
+        else:
+            # 根据RSI和价格行为判断
+            if 30 <= rsi_value <= 70:  # RSI在中间区域
+                market_morphology = "震荡"
+            elif rsi_value > 70:  # RSI超买
+                market_morphology = "偏空"
+            elif rsi_value < 30:  # RSI超卖
+                market_morphology = "偏多"
+            else:
+                market_morphology = "不明"
+
         # 根据用户要求修改第三列显示逻辑
         # 如果第二列（original_trend_str）和第四列（forecast_short_term_str）一样，第三列不变
         # 如果第二列和第四列不一样:
         # - 如果第五列（continuation_str）数字>=2，且第四列是上涨，则第三列是做多
         # - 如果第五列（continuation_str）数字>=2，且第四列是下跌，则第三列是做空
-        # - 如果第五列是横盘（数字为0），则第三列使用第二列的方向
+        # - 如果第五列是横盘（数字为0），则第三列使用上一个信号方向
         
         # 初始化最终显示方向
         final_actual_trend_str_display = actual_trend_str_display
@@ -1672,12 +1671,23 @@ class M1DataAnalyzerAndTrainer:
                     # 如果是横盘但延续次数>=阈值，仍然按原方向
                     final_actual_trend_str_display = actual_trend_str_display
             elif continuation_num == 0 and forecast_short_term_str == "横盘":
-                # 如果第五列是横盘（数字为0），则第三列使用第二列的方向
-                final_actual_trend_str_display = original_trend_str
+                # 如果第五列是横盘（数字为0），则第三列使用上一个信号方向
+                if self.last_actual_direction is not None:
+                    final_actual_trend_str_display = self.last_actual_direction
+                else:
+                    final_actual_trend_str_display = original_trend_str
             else:
                 # 其他情况使用第二列（原方向）的值（去除趋势调整标记）
                 final_actual_trend_str_display = original_trend_str
         
+        # 更新上一个实际方向
+        if forecast_short_term_str != "横盘":
+            # 只有当短期趋势不是横盘时，才更新last_actual_direction
+            if forecast_short_term_str == "上涨":
+                self.last_actual_direction = "做多"
+            elif forecast_short_term_str == "下跌":
+                self.last_actual_direction = "做空"
+
         valid_str = "✅ 有效" if signal_valid else "❌ 无效"
         open_time_str = open_time.strftime("%Y-%m-%d %H:%M") if pd.notna(open_time) else "未知"
 
@@ -1709,11 +1719,11 @@ class M1DataAnalyzerAndTrainer:
         })
 
         # 打印单条信号（实战中可输出多条）
-        signal_str = f"{open_time_str:<20} {original_trend_str:<8} {final_actual_trend_str_display:<12} {forecast_short_term_str:<6} {continuation_str:<10} {round(reversal_prob, 1):<10} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
+        signal_str = f"{open_time_str:<20} {original_trend_str:<8} {final_actual_trend_str_display:<12} {forecast_short_term_str:<6} {continuation_str:<10} {market_morphology:<10} {round(reversal_prob, 1):<10} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
         print(signal_str)
         
         # 记录交易信号到日志文件，格式与控制台输出一致，不包含时间戳
-        log_signal_str = f"{open_time_str:<20} {original_trend_str:<8} {final_actual_trend_str_display:<12} {forecast_short_term_str:<6} {continuation_str:<10} {round(reversal_prob, 1):<10} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
+        log_signal_str = f"{open_time_str:<20} {original_trend_str:<8} {final_actual_trend_str_display:<12} {forecast_short_term_str:<6} {continuation_str:<10} {market_morphology:<10} {round(reversal_prob, 1):<10} {round(amplitude_pred, 2):<12} {round(stop_loss_amplitude, 2):<12} {round(trend_confidence, 1):<10} {session:<10}"
         
         # 将信号直接写入日志文件，不包含时间戳和其他信息
         with open(log_dir / f"trading_signals_{datetime.now().strftime('%Y%m%d')}.log", "a", encoding="utf-8") as f:

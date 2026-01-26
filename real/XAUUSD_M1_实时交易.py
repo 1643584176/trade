@@ -67,7 +67,7 @@ class XAUUSDM1RealTimeTrader:
             return None
 
         # 交易参数
-        self.fixed_lot_size = 0.2  # 固定手数0.2手
+        self.fixed_lot_size = 0.5  # 固定手数2手
         # 获取今日0点0分的UTC时间戳
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
