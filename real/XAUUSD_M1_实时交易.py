@@ -94,9 +94,7 @@ class XAUUSDM1RealTimeTrader:
         self.trade_thread = None
         self.stop_event = Event()
         self.trading_disabled = False  # 交易禁用标志
-        
-        # 加载AI模型和scaler
-        self.load_ai_models()
+
         
         # 信号文件路径
         self.signals_dir = "."  # 当前目录
@@ -696,51 +694,7 @@ class XAUUSDM1RealTimeTrader:
         
         return tick.ask, tick.bid
     
-    def load_ai_models(self):
-        """加载AI模型和scaler"""
-        try:
-            # 动态导入m1_data_analyzer_and_trainer模块以获取模型
-            import os
-            import joblib
-            
-            # 查找最新的模型文件
-            model_dir = "trading_ai_models"
-            if os.path.exists(model_dir):
-                # 获取目录中所有pkl文件
-                pkl_files = [f for f in os.listdir(model_dir) if f.endswith('.pkl')]
-                
-                if pkl_files:
-                    # 按时间排序，获取最新的模型文件
-                    latest_scaler = None
-                    for file in sorted(pkl_files):
-                        if file.startswith('scaler_'):
-                            latest_scaler = file
-                        
-                    if latest_scaler:
-                        scaler_path = os.path.join(model_dir, latest_scaler)
-                        self.scaler = joblib.load(scaler_path)
-                        print(f"✅ 成功加载scaler模型: {latest_scaler}")
-                    else:
-                        # 如果没有找到scaler，创建一个新的StandardScaler
-                        from sklearn.preprocessing import StandardScaler
-                        self.scaler = StandardScaler()
-                        print("⚠️  未找到scaler模型，使用默认StandardScaler")
-                else:
-                    # 如果没有找到任何pkl文件，创建一个新的StandardScaler
-                    from sklearn.preprocessing import StandardScaler
-                    self.scaler = StandardScaler()
-                    print("⚠️  未找到任何模型文件，使用默认StandardScaler")
-            else:
-                # 如果模型目录不存在，创建一个新的StandardScaler
-                from sklearn.preprocessing import StandardScaler
-                self.scaler = StandardScaler()
-                print("⚠️  模型目录不存在，使用默认StandardScaler")
-        except Exception as e:
-            print(f"❌ 加载AI模型失败: {str(e)}")
-            # 出错时创建一个新的StandardScaler
-            from sklearn.preprocessing import StandardScaler
-            self.scaler = StandardScaler()
-            print("⚠️  使用默认StandardScaler")
+
     
     def check_loss_limits(self):
         """检查是否超过亏损限制"""
