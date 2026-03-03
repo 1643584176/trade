@@ -147,3 +147,5 @@ cython_debug/
 
 # Ignore all json files
 *.json
+/.idea/misc.xml
+/.idea/newProject.iml

@@ -4,7 +4,7 @@ M1数据趋势分析与AI模型训练一体化工具
 """
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+
 import warnings
 from datetime import datetime, timedelta
 import MetaTrader5 as mt5
